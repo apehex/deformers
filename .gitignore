@@ -1,0 +1,12 @@
+# secrets
+.env
+
+# python env
+.python-version
+.venv
+poetry.lock
+
+# temp
+.pytest_cache
+__pycache__
+dist
