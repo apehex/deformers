@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "deformers"
-version = "0.0.1"
+version = "0.0.3"
 description = "Reverse engineer transformer models."
 license = ".github/LICENSE.md"
 readme = ".github/README.md"
