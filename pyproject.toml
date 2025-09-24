@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "deformers"
-version = "0.0.3"
+version = "0.0.4"
 description = "Reverse engineer transformer models."
 license = ".github/LICENSE.md"
 readme = ".github/README.md"
@@ -9,6 +9,7 @@ packages = [{include = "deformers"}]
 
 [tool.poetry.dependencies]
 python = ">=3.10, <3.14"
+mlable-torch = ">=0.2.8"
 transformers = ">=4.0"
 
 [tool.poetry.group.dev.dependencies]
