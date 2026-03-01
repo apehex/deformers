@@ -7,13 +7,6 @@ import transformers.models.gpt_oss.modeling_gpt_oss
 import transformers.processing_utils
 import transformers.utils.generic
 
-# PATCH ########################################################################
-
-transformers.models.gpt_oss.modeling_gpt_oss.GptOssPreTrainedModel._can_record_outputs = {
-    "router_logits": transformers.utils.generic.OutputRecorder(transformers.models.gpt_oss.modeling_gpt_oss.GptOssMLP, index=1),
-    "hidden_states": transformers.models.gpt_oss.modeling_gpt_oss.GptOssDecoderLayer,
-    "attentions": transformers.models.gpt_oss.modeling_gpt_oss.GptOssAttention,}
-
 # INFERENCE ####################################################################
 
 class GptOssForCausalInference(transformers.models.gpt_oss.modeling_gpt_oss.GptOssForCausalLM):
