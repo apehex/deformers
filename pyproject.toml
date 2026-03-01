@@ -1,20 +1,25 @@
-[tool.poetry]
+[project]
 name = "deformers"
-version = "0.0.4"
+version = "0.1.0"
 description = "Reverse engineer transformer models."
-license = ".github/LICENSE.md"
+authors = [{ name = "apehex", email = "17317183+apehex@users.noreply.github.com" }]
 readme = ".github/README.md"
-authors = ["apehex <17317183+apehex@users.noreply.github.com>"]
-packages = [{include = "deformers"}]
+license = "AGPL-3.0"
+license-files = [".github/LICENSE.md"]
+requires-python = ">=3.10, <3.14"
+dependencies = [
+    "mlable-torch>=0.2",
+    "transformers>=5.2",]
 
-[tool.poetry.dependencies]
-python = ">=3.10, <3.14"
-mlable-torch = ">=0.2.8"
-transformers = ">=4.0"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "*"
+[dependency-groups]
+dev = ["pytest"]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.sdist]
+include = ["deformers"]
+
+[tool.hatch.build.targets.wheel]
+include = ["deformers"]
