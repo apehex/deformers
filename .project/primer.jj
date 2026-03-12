@@ -1,0 +1,11 @@
+{{ context }}
+
+{{ invariants }}
+
+{{ todo }}
+
+{{ decisions | recent }}
+
+# Message
+
+{{ message }}
