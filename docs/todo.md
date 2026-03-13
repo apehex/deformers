@@ -4,21 +4,20 @@ Near-term tasks.
 
 ## Documentation
 
-- finalize README
-- document patch interfaces
-- document training pipeline
+- finalize the readme
+- review all the docs
 
 ## Prefix experiment
 
-- implement composite embedding module
-- build vocabulary byte dataset
-- train embedding regression baseline
+- migrate the composite layer from mlable
+- combine the byte and qwen tokenizers
+- code the custom loss at depth k
 
 ## Suffix experiment
 
-- design hierarchical vocabulary tree
-- implement hierarchical head module
-- build sampling routine
+- design a vocabulary tree matching the tokenizer's vocabulary
+- ask for the BPE tree of qwen3.5
+- make the training loss / task tighter
 
 ## Infrastructure
 

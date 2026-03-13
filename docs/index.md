@@ -1,4 +1,4 @@
-# Project Structure
+# Index
 
 Repository structure overview.
 
