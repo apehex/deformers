@@ -2,33 +2,18 @@
 
 Repository structure overview.
 
-## Code
+## Docs
 
-modules implementing experimental patches
-
-- composite embedding
-- hierarchical head
-- reversible suffix
-
-## Training
-
-training pipelines for patch modules
-
-- distillation pipelines
-- dataset preprocessing
-- evaluation scripts
-
-## Documentation
-
-- README.md
-- .project documentation files
-
-## Assets
-
-- images
-- experiment outputs
-
-## External dependencies
-
-- transformers
-- pytorch
+| Path                      | Purpose                               |
+| ------------------------- | ------------------------------------- |
+| `-- docs`                 |                                       |
+| `   -- agents.md`         | Agent guidelines                      |
+| `   -- context.md`        | Project overview                      |
+| `   -- decisions.md`      | Choice rationale                      |
+| `   -- ideas.md`          | Future work                           |
+| `   -- index.md`          | Repository structure                  |
+| `   -- invariants.md`     | Hard rules                            |
+| `   -- issues.md`         | Curated problems                      |
+| `   -- primer.jj`         | Conversation primer (Jinja template)  |
+| `   -- references.md`     | External references                   |
+| `   -- todo.md`           | Actionable tasks                      |
