@@ -1,19 +1,28 @@
 # Index
 
-Repository structure overview.
+Overview of the repository structure.
 
 ## Docs
 
 | Path                      | Purpose                               |
 | ------------------------- | ------------------------------------- |
 | `-- docs`                 |                                       |
-| `   -- agents.md`         | Agent guidelines                      |
-| `   -- context.md`        | Project overview                      |
-| `   -- decisions.md`      | Choice rationale                      |
-| `   -- ideas.md`          | Future work                           |
-| `   -- index.md`          | Repository structure                  |
-| `   -- invariants.md`     | Hard rules                            |
-| `   -- issues.md`         | Curated problems                      |
+| `   -- agents.md`         | Guidelines for LLM agents             |
+| `   -- context.md`        | Overview of the project               |
+| `   -- decisions.md`      | Record of important design choices    |
+| `   -- ideas.md`          | Research directions and speculations  |
+| `   -- index.md`          | Structure of the repository           |
+| `   -- invariants.md`     | Hard constraints                      |
+| `   -- issues.md`         | Curated list of important problems    |
 | `   -- primer.jj`         | Conversation primer (Jinja template)  |
 | `   -- references.md`     | External references                   |
-| `   -- todo.md`           | Actionable tasks                      |
+| `   -- todo.md`           | Concrete next tasks                   |
+
+## Sources
+
+| Path                      | Purpose                               |
+| ------------------------- | ------------------------------------- |
+| `-- src`                  |                                       |
+| `   -- deformers`         | Root of the package                   |
+
+## Tests
