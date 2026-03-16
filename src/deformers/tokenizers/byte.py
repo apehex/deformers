@@ -3,6 +3,8 @@ import json
 import os
 import transformers
 
+# BASE #########################################################################
+
 class ByteTokenizer(transformers.PreTrainedTokenizer):
     """
     Special tokenizer that encodes text as a sequence of byte indexes.
@@ -82,7 +84,7 @@ class ByteTokenizer(transformers.PreTrainedTokenizer):
             mask_token=mask_token,
             **__kwargs)
 
-    def _tokenize(self, text: str, **kwargs) -> List[str]:
+    def _tokenize(self, text: str, **kwargs) -> list[str]:
         """
         Each Unicode character is represented by a sequence of 1 to 4 tokens.
         These tokens are actually bytes converted to strings.
@@ -104,7 +106,7 @@ class ByteTokenizer(transformers.PreTrainedTokenizer):
         """
         return chr(index)
 
-    def convert_tokens_to_string(self, tokens: List[str]) -> str:
+    def convert_tokens_to_string(self, tokens: list[str]) -> str:
         """
         Each Unicode character is represented by a sequence of 1 to 4 tokens.
         These tokens are actually bytes converted to strings.
@@ -124,7 +126,7 @@ class ByteTokenizer(transformers.PreTrainedTokenizer):
         """
         return 256
 
-    def get_vocab(self) -> Dict[str, int]:
+    def get_vocab(self) -> dict[str, int]:
         """
         The byte tokenizer does not use a vocabulary at all.
         It is implemented for compatibility with the parent classes.
@@ -133,7 +135,7 @@ class ByteTokenizer(transformers.PreTrainedTokenizer):
         """
         return {chr(__i): __i for __i in range(256)}
 
-    def save_vocabulary(self, save_directory: str, filename_prefix: Optional[str] = None) -> Tuple[str]:
+    def save_vocabulary(self, save_directory: str, filename_prefix: (str | None)=None) -> tuple[str]:
         """
         The byte tokenizer does not use a vocabulary at all.
         It is implemented for compatibility with the parent classes.
