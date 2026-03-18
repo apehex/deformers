@@ -9,14 +9,16 @@ Near-term tasks.
 
 ## Prefix experiment
 
-- migrate the composite layer from mlable
-- combine the byte and qwen tokenizers
 - code the custom loss at depth k
+- share the trunk between original and patched models
+- train the prefix patch
+- compare the logits of the 2 models:
+    - KL divergence between the 2
+    - text generation samples
 
 ## Suffix experiment
 
-- design a vocabulary tree matching the tokenizer's vocabulary
-- ask for the BPE tree of qwen3.5
+- turn the BPE merges into a binary tree
 - make the training loss / task tighter
 
 ## Infrastructure
