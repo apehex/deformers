@@ -16,6 +16,8 @@ Potential advantages:
 - remove dependency on large token embedding tables
 - exploit internal structure of token strings
 - allow deterministic reconstruction of embeddings
+- keep the information on the token composition
+- compress the embedding layers
 
 Possible variants:
 
@@ -42,15 +44,6 @@ Tree construction options:
 - embedding clustering
 - BPE structure
 
-## Reversible suffix
-
-Replace final transformer blocks with reversible decoding module.
-
-Potential goals:
-
-- explore invertible representations
-- analyze information flow in final layers
-
 ## Training
 
 Distillation-based patch training
@@ -67,11 +60,3 @@ Possible training stages:
 1. local module pretraining
 2. frozen-trunk alignment
 3. optional partial trunk unfreezing
-
-## Model targets
-
-Potential models for experiments:
-
-- qwen3.5-9b
-- qwen variants
-- other open-source LLMs

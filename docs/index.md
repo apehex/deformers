@@ -12,7 +12,7 @@ Overview of the repository structure.
 | `   -- decisions.md`      | Record of important design choices    |
 | `   -- ideas.md`          | Research directions and speculations  |
 | `   -- index.md`          | Structure of the repository           |
-| `   -- invariants.md`     | Hard constraints                      |
+| `   -- invariants.md`     | Hard constraints to respect           |
 | `   -- issues.md`         | Curated list of important problems    |
 | `   -- primer.jj`         | Conversation primer (Jinja template)  |
 | `   -- references.md`     | External references                   |

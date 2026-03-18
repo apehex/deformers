@@ -1,8 +1,9 @@
-# Sources
+# References
 
 ## Models
 
 - https://huggingface.co/Qwen/Qwen3.5-9B
+- https://huggingface.co/Qwen/Qwen3.5-9B/raw/main/merges.txt
 
 ## Key references
 

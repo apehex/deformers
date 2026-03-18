@@ -1,37 +1,42 @@
 # Context
 
-Repository: `apehex/deformers`
+## Repository
 
-Purpose:
-Experiments with modular neural network patches applied to pretrained large language models.
+`apehex/deformers` on Github.
 
-Primary target model:
-`qwen/qwen3.5-9b`
+## Models
 
-Main objective:
-Evaluate whether large pretrained LLMs can be partially replaced by smaller structured modules while keeping most of the transformer trunk frozen.
+Mostly `qwen/qwen3.5-9b`.
 
-Current patching directions:
+## Purpose
+
+Patch the layers of pretrained LLMs.
+
+## Objectives
+
+Experiment with model level composition and test the modularity.
+
+## Directions
 
 - prefix patches (input representation)
 - suffix patches (output distribution)
-- reversible decoding experiments
+- custom decoder (reversing the auto-regression, toward past tokens)
 
-Design principles:
+## Design Principles
 
-- keep pretrained trunk frozen when possible
+- freeze most of the original model
 - train only localized modules
+- keep the same input partition and tokenization vocabulary
 - align patched modules with the pretrained model via distillation or hidden-state matching
-- maintain compatibility with the original tokenizer and vocabulary unless explicitly testing alternatives
 
-Typical workflow:
+# Workflow
 
 1. split pretrained model into prefix / trunk / suffix
 2. replace prefix or suffix with experimental module
 3. train patch using teacher outputs from the original model
 4. evaluate performance relative to baseline model
 
-Focus areas:
+## Focus Areas
 
 - embedding compression
 - vocabulary compression
