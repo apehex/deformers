@@ -29,16 +29,17 @@ Experiment with model level composition and test the modularity.
 - keep the same input partition and tokenization vocabulary
 - align patched modules with the pretrained model via distillation or hidden-state matching
 
-# Workflow
+## Motivations
+
+- remove dependency on large token embedding tables
+- exploit internal structure of token strings
+- allow deterministic reconstruction of embeddings
+- keep the information on the token composition
+- test modular training and composition of sub-models
+
+## Workflow
 
 1. split pretrained model into prefix / trunk / suffix
 2. replace prefix or suffix with experimental module
 3. train patch using teacher outputs from the original model
 4. evaluate performance relative to baseline model
-
-## Focus Areas
-
-- embedding compression
-- vocabulary compression
-- modular training
-- structured output heads

@@ -1,9 +1,0 @@
-{% include "context.md" %}
-
-{% include "invariants.md" %}
-
-{% include "decisions.md" %}
-
-# Message
-
-{{ message }}
