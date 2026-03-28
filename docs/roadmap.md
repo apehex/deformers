@@ -6,7 +6,7 @@ It combines short-term tasks, mid-term experiments, and longer-term directions.
 
 ---
 
-# Phase 0 — Foundations
+# Phase 0 - Foundations
 
 Objective: establish a stable experimental framework.
 
@@ -31,7 +31,7 @@ Objective: establish a stable experimental framework.
 
 ---
 
-# Phase 1 — Prefix Patch (Composite Embedding)
+# Phase 1 - Prefix Patch (Composite Embedding)
 
 Objective: replace the token embedding layer while preserving model behavior.
 
@@ -73,7 +73,7 @@ Objective: replace the token embedding layer while preserving model behavior.
 
 ---
 
-# Phase 2 — Suffix Patch (Hierarchical Head)
+# Phase 2 - Suffix Patch (Hierarchical Head)
 
 Objective: replace the output projection layer.
 
@@ -112,7 +112,7 @@ Candidate strategies:
 
 ---
 
-# Phase 3 — End-to-End Distillation
+# Phase 3 - End-to-End Distillation
 
 Objective: align patched model with original model.
 
@@ -138,7 +138,7 @@ Objective: align patched model with original model.
 
 ---
 
-# Phase 4 — Extensions
+# Phase 4 - Extensions
 
 ## Reversible suffix
 
