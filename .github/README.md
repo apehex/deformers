@@ -48,6 +48,12 @@ So that a tensor of shape `(B, 32 * S)` is processed into `(B, S, 32 * 128) = (B
 
 Then a regular transformer block maps these composite embeddings with the original emebddings of the Qwen model.
 
+Current implementation in this repository uses:
+
+- `CompositeEmbedding(256, hidden_size / 32, group_dim=32)` for byte patches
+- an extra Qwen decoder layer (`Qwen3DecoderLayer`) as prefix encoder before the frozen trunk
+- frozen trunk and frozen LM head, with only prefix modules trainable
+
 #### Input representation
 
 Input text is tokenized using the original Qwen tokenizer.
@@ -67,6 +73,12 @@ Where:
 - $k$ is the depth inside the original Qwen 3.5 model
 - $H_{k, qwen}$ is the hidden state at depth $k$ in the original model
 - $H_{k, patch}$ is the hiden state obtained when replacing the embedding layer
+
+The code now includes a lightweight prefix-distillation loop (Colab-friendly):
+
+- teacher and student run with shared token partition
+- hidden-state MSE distillation on the frozen trunk outputs
+- mixed precision (`torch.autocast`) + gradient accumulation + gradient clipping
 
 ### Hierarchical Softmax Head
 
