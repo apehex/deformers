@@ -37,11 +37,11 @@ MODEL_OBJ = transformers.AutoModelForCausalLM.from_pretrained(**MODEL_CFG)
 # batch of samples made of a single sentence
 __texts = TEXT_CFG['wiki'].split('. ')
 # list of couples of indices (start, end), for each sample
-__offsets = TOKEN_OBJ(texts, return_offsets_mapping=True)['offset_mapping']
+__offsets = TOKEN_OBJ(__texts, return_offsets_mapping=True)['offset_mapping']
 # list of token sub-strings, for each sample
-__tokens = [[__t[__s:__e] for (__s, __e) in __o] for (__t, __o) in zip(texts, offsets)]
+__tokens = [[__t[__s:__e] for (__s, __e) in __o] for (__t, __o) in zip(__texts, __offsets)]
 # fixed size patches of bytes, for each sample
-__bytes = [BYTE_OBJ(__s, max_length=16, truncation=True, padding='max_length', padding_side='right')['input_ids'] for __s in tokens]
+__bytes = [BYTE_OBJ(__s, max_length=16, truncation=True, padding='max_length', padding_side='right')['input_ids'] for __s in __tokens]
 
 # RESET ########################################################################
 
