@@ -44,3 +44,11 @@ print([__t.encode('utf-8').hex() for __t in TOKENIZER_OBJ.get_vocab().keys() if 
 #  'c3a0c2b8c2b3c3a0c2b8c4bbc3a0c2b8c2a7c3a0c2b8c2a2c3a0c2b8c4a3c3a0c2b8c2b2c3a0c2b8c2a3',
 #  'c4a0c390c2b4c390c2b5c390c2b9c391c4a3c391c4a4c390c2b2c390c2bec390c2b2c390c2b0c391c4a4c391c4ae']
 ```
+
+For training and reproducibility, patching is now reversible:
+
+- store `lengths` for each token byte sequence
+- store `overflow_ids` for truncated tails
+- decode with `prefix[:min(length, max_length)] + overflow_ids`
+
+This preserves exact token strings even when the fixed-size block truncates the stored prefix.
