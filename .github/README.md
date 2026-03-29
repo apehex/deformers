@@ -46,7 +46,7 @@ The original token embedding `Embedding(V=248320, D=4096)` is replaced with a **
 
 So that a tensor of shape `(B, 32 * S)` is processed into `(B, S, 32 * 128) = (B, S, 4096)`.
 
-Then a regular transformer block maps these composite embeddings with the original emebddings of the Qwen model.
+Then a regular transformer block maps these composite embeddings with the original embeddings of the Qwen model.
 
 Current implementation in this repository uses:
 
@@ -72,7 +72,7 @@ Where:
 
 - $k$ is the depth inside the original Qwen 3.5 model
 - $H_{k, qwen}$ is the hidden state at depth $k$ in the original model
-- $H_{k, patch}$ is the hiden state obtained when replacing the embedding layer
+- $H_{k, patch}$ is the hidden state obtained when replacing the embedding layer
 
 The code now includes a lightweight prefix-distillation loop (Colab-friendly):
 
