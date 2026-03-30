@@ -32,16 +32,23 @@ BYTE_OBJ = deformers.tokenizers.byte.ByteTokenizer()
 TOKEN_OBJ = transformers.AutoTokenizer.from_pretrained(**TOKEN_CFG)
 MODEL_OBJ = transformers.AutoModelForCausalLM.from_pretrained(**MODEL_CFG)
 
-# TOKENS #######################################################################
+# ENCODE #######################################################################
 
 # batch of samples made of a single sentence
 __texts = TEXT_CFG['wiki'].split('. ')
-# list of couples of indices (start, end), for each sample
-__offsets = TOKEN_OBJ(__texts, return_offsets_mapping=True)['offset_mapping']
-# list of token sub-strings, for each sample
+# list of couples of indices (start, end), for each sample (the offsets for the padding are `(0, 0)`)
+__offsets = TOKEN_OBJ(__texts, return_offsets_mapping=True, padding='longest')['offset_mapping']
+# list of token sub-strings, for each sample (the tokens for the offsets `(0, 0)` are `""`)
 __tokens = [[__t[__s:__e] for (__s, __e) in __o] for (__t, __o) in zip(__texts, __offsets)]
-# fixed size patches of bytes, for each sample
-__bytes = [BYTE_OBJ(__s, max_length=16, truncation=True, padding='max_length', padding_side='right')['input_ids'] for __s in __tokens]
+# fixed size patches of bytes, for each sample (and the byte blocks for `""` are `16 * [128]` as expected)
+__encoded = [BYTE_OBJ(__s, max_length=16, truncation=True, padding='max_length', padding_side='right')['input_ids'] for __s in __tokens]
+# (non rag) tensor of fixed shape, thanks to the padding introduced by the actual tokenizer
+__tensor = torch.tensor(__encoded)
+
+# DECODE #######################################################################
+
+# the padding bytes 128 are automatically removed
+__decoded = [''.join(BYTE_OBJ.decode(__s)) for __s in __encoded]
 
 # RESET ########################################################################
 
