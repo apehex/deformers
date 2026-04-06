@@ -3,6 +3,10 @@ import torch.nn
 
 import mlable.layers.embedding
 
+# META #########################################################################
+
+SHAPE_MSG = 'Inputs must be rank {}, got shape={} with group_dim={}'
+
 # BYTE #########################################################################
 
 class CompositeBytePrefix(torch.nn.Module):
@@ -99,14 +103,10 @@ class CompositeBytePrefix(torch.nn.Module):
         __group = self._config.get('group_dim', -1)
         # unspecified group dimension: the inputs must already be split into blocks
         if __group <= 0:
-            assert (
-                len(__shape) == 3, 
-                'Inputs must be rank 3 (B, T, G), got shape={} with group_dim={}'.format(__shape, __group))
+            assert len(__shape) == 3,SHAPE_MSG.format(3, __shape, __group)
         # explicit group dimension: the inputs are expected to bea batch of flat sequences
         else:
-            assert (
-                len(__shape) == 2,
-                'Inputs must be rank 2 (B, T*G), got shape={} with group_dim={}'.format(__shape, __group))
+            assert len(__shape) == 2, SHAPE_MSG.format(2, __shape, __group)
         # lazy init: build sub-layers on first call, placed on input device
         self._build(__shape, device_str=inputs_arr.device)
         # (B, T, G) => (B, T, H) or (B, T*G) => (B, T, H)
