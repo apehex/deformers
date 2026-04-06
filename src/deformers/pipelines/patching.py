@@ -30,20 +30,15 @@ def encode_into_bytes(
 
 def tokenize_into_bytes(
     texts_arr: list[str],
-    text_tokenizer_obj: object,
-    byte_tokenizer_obj: object=deformers.tokenizers.byte.ByteTokenizer(encoding='utf-8'),
+    offsets_arr: list[list[tuple[int, int]]],
     patch_dim: int=32,
+    tokenizer_obj: object=deformers.tokenizers.byte.ByteTokenizer(encoding='utf-8'),
 ) -> list[list[list[int]]]:
     """Produce aligned (B, T, G) tensors from a batch of raw text strings."""
-    # tokenize with offset mapping so we can recover per-token substrings
-    __encoding = text_tokenizer_obj(
-        texts_arr,
-        return_offsets_mapping=True,
-        padding='longest')
     # recover the original substring for each token in each sample
     __tokens = partition_into_tokens(
         texts_arr=texts_arr,
-        offsets_arr=__encoding['offset_mapping'])
+        offsets_arr=offsets_arr)
     # encode each substring as a fixed-length byte block
     __outputs = encode_into_bytes(
         tokens_arr=__tokens,
