@@ -11,7 +11,7 @@ SHAPE_MSG = 'Inputs must be rank {}, got shape={} with group_dim={}'
 
 class CompositeBytePrefix(torch.nn.Module):
     """
-    Stage A alternative prefix: byte block embeddings projected to the hidden
+    Alternative prefix: composite byte embeddings projected to the hidden
     space of the base language model.
 
     Assumptions:
@@ -21,16 +21,14 @@ class CompositeBytePrefix(torch.nn.Module):
     - Byte block size defaults to L_max=32 (see docs/roadmap.md).
     - The byte tokenizer uses pad_id=128 (as in ByteTokenizer).
 
-    Input modes:
+    Inputs:
     - group_dim <= 0: inputs must be rank-3 (B, T, G) already split into byte
       blocks; CompositeEmbedding is called with group_dim=-1.
     - group_dim > 0: inputs may be rank-2 (B, T*G) flat; CompositeEmbedding
       splits them by group_dim internally.
 
-    Shape contract:
-        inputs_arr: (B, T, G) long  [group_dim <= 0 mode]
-              or   (B, T*G)   long  [group_dim >  0 mode]
-        return:     (B, T, latent_dim) float
+    Outputs:
+    Always (B, T, H) float.
     """
 
     def __init__(
