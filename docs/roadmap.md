@@ -35,34 +35,38 @@ Objective: establish a stable experimental framework.
 
 Objective: replace the token embedding layer while preserving model behavior.
 
-## Representation
+## Representation [done]
 
 - encode tokens using UTF-8 byte sequences
 - fix maximum token length:
   - `L_max = 32 bytes`
-- pad shorter tokens with null bytes
+- pad shorter tokens with null bytes (pad_id=128)
 - truncate longer tokens
+- preprocessing in `src/deformers/patching/bytes.py`
 
-## Architecture
+## Architecture [done - Stage A]
 
-- byte embedding:
-  - `Embedding(256, d_byte)`
-- reshape to token embedding:
-  - `(L_max × d_byte = hidden_size)`
-- optional projection / normalization layer
+- Stage A (implemented):
+  - `CompositeBytePrefix` in `src/deformers/layers/prefix.py`
+  - `CompositeEmbedding(256, embed_dim, group_dim=G, merge_axes=True)` -> `(B, T, G*embed_dim)`
+  - `LayerNorm -> Linear -> SiLU -> Linear -> LayerNorm` projection to `hidden_size`
+  - lazy-build, no explicit device args, submodules registered as `self._layers`
+- Stage B (planned): add a copied Qwen decoder block inside the prefix
+- Stage C (planned): small byte-level transformer over G positions
 
-## Training
+## Training [done - Stage A]
 
-- embedding regression:
-  - match original embedding vectors
-- hidden-state matching at depth `k`
-- optional KL divergence on logits
+- training script: `scripts/train_prefix_stage_a.py`
+- embedding regression warmup: MSE between prefix output and original embeddings
+- hidden-state matching at depth `k` (distillation via `inputs_embeds`)
+- trunk and lm_head are frozen; only prefix parameters are trained
+- optional KL divergence on logits (planned)
 
-## Integration
+## Integration [done]
 
-- share transformer trunk with original model
-- ensure identical tokenizer partition
-- ensure output shape compatibility
+- shared transformer trunk via `inputs_embeds` HF interface
+- tokenizer partition identical to base model
+- output shape `(B, T, hidden_size)` compatible with trunk
 
 ## Evaluation
 
