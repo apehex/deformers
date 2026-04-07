@@ -40,10 +40,10 @@ def tokenize_into_bytes(
         texts_arr=texts_arr,
         offsets_arr=offsets_arr)
     # encode each substring as a fixed-length byte block
-    __outputs = encode_into_bytes(
+    return encode_into_bytes(
         tokens_arr=__tokens,
         patch_dim=patch_dim,
-        tokenizer_obj=byte_tokenizer_obj)
+        tokenizer_obj=tokenizer_obj)
 
 # POSTPROCESSING ###############################################################
 
