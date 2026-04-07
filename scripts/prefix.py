@@ -157,7 +157,7 @@ OPTIMIZER_OBJ.zero_grad()
 # TRAINING #####################################################################
 
 for __epoch in range(TRAINING_CFG['epoch_num']):
-    for __batch in DATASET_OBJ:
+    for __batch in iter(DATASET_OBJ):
         # sample a batch
         __texts = __batch['text']
 
@@ -217,7 +217,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             __loss = __loss / GRADIENT_CFG['accumulation_num']
 
         SCALER_OBJ.scale(__loss).backward()
-        __accum_loss += __loss.item() * GRADIENT_CFG['accumulation_num']
+        __accum_loss += __loss.item()
 
         # optimizer step after gradient accumulation
         if (__step + 1) % GRADIENT_CFG['accumulation_num'] == 0:
@@ -227,7 +227,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             SCALER_OBJ.update()
             OPTIMIZER_OBJ.zero_grad()
 
-            print(f"[train] step={__step:04d} loss={__accum_loss / GRADIENT_CFG['accumulation_num']:.6f}")
+            print(f"[train] step={((__step + 1) // GRADIENT_CFG['accumulation_num']):04d} loss={__accum_loss:.6f}")
             __accum_loss = 0.0
 
         # track the global step (across epochs)
