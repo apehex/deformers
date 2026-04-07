@@ -19,7 +19,6 @@ import deformers.layers.prefix
 
 _B, _T, _G, _E, _H = 2, 31, 16, 8, 64
 
-
 @pytest.fixture
 def prefix_rank3():
     """Prefix with group_dim=-1 (expects rank-3 inputs)."""
@@ -29,7 +28,6 @@ def prefix_rank3():
         latent_dim=_H,
         group_dim=-1,)
 
-
 @pytest.fixture
 def prefix_rank2():
     """Prefix with group_dim=G (expects rank-2 flat inputs)."""
@@ -38,7 +36,6 @@ def prefix_rank2():
         vocab_dim=256,
         latent_dim=_H,
         group_dim=_G,)
-
 
 # SHAPE TESTS ##################################################################
 
