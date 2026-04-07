@@ -18,6 +18,7 @@ Training scheme (Stage A):
 - Only prefix parameters are updated; trunk is frozen.
 """
 
+import contextlib
 import os
 
 import datasets
@@ -30,31 +31,40 @@ import deformers.layers.prefix
 import deformers.pipelines.patching
 import deformers.tokenizers.byte
 
-# CONFIG #######################################################################
-
-SAVE_PATH = 'checkpoints/prefix.pt'
+# COMMON CONFIG ################################################################
 
 MAIN_CFG = {
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'encoding': 'utf-8',
+    'seed': 1337,
     'patch_dim': 32,
     'depth_num': 4,}
+
+# DATA CONFIG ##################################################################
 
 DATASET_CFG = {
     'path': 'wikimedia/wikipedia',
     'name': '20231101.en',
-    'split': 'train',}
+    'split': 'train',
+    'streaming': False,}
 
 BATCH_CFG = {
     'batch_dim': 4,
     'sequence_dim': 256,
     'patch_dim': MAIN_CFG['patch_dim'],}
 
+# PREPROCESSING CONFIG #########################################################
+
 TOKEN_CFG = {
     'pretrained_model_name_or_path': 'qwen/qwen3.5-9b',
     'use_fast': True,}
 
-ORIGIN_CFG = {
+BYTE_CFG = {
+    'encoding': MAIN_CFG['encoding'],}
+
+# MODEL CONFIG #################################################################
+
+MODEL_CFG = {
     'pretrained_model_name_or_path': 'qwen/qwen3.5-9b',
     'device_map': MAIN_CFG['device'],
     'torch_dtype': torch.bfloat16,}
@@ -64,6 +74,8 @@ PREFIX_CFG = {
     'vocab_dim': 256,
     'latent_dim': 4096,
     'group_dim': -1,}
+
+# TRAINING CONFIG ##############################################################
 
 TRAINING_CFG = {
     'step_num': 256,}
@@ -81,8 +93,13 @@ LOSS_CFG = {
     'hidden_rate': 1.0,
     'embed_rate': 0.1,}
 
+# OUTPUT CONFIG ################################################################
+
 LOGGING_CFG = {
     'step_num': 32,}
+
+OUTPUT_CFG = {
+    'save_path': 'checkpoints/prefix.pt',}
 
 # UTILS ########################################################################
 
@@ -116,7 +133,7 @@ BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(encoding=MAIN_CFG['encoding']
 # MODELS #######################################################################
 
 print('[init] loading models...')
-ORIGIN_MOD = transformers.AutoModelForCausalLM.from_pretrained(**ORIGIN_CFG).to(device=MAIN_CFG['device'])
+ORIGIN_MOD = transformers.AutoModelForCausalLM.from_pretrained(**MODEL_CFG).to(device=MAIN_CFG['device'])
 PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device'])
 
 print('[init] freezing teacher...')
@@ -162,8 +179,14 @@ for __i in range(TRAINING_CFG['step_num'] * GRADIENT_CFG['accumulation_num']):
 
     # format as tensors
     __tokens_arr = torch.tensor(__inputs['input_ids'], dtype=torch.long, device=MAIN_CFG['device'])
-    __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.bool, device=MAIN_CFG['device'])
+    __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.long, device=MAIN_CFG['device'])
     __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=MAIN_CFG['device'])
+
+    # mixed precision
+    __amp_ctx = (
+        torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
+        if SCALER_CFG['enabled']
+        else contextlib.nullcontext())
 
     # teacher forward: get original embeddings and hidden states (no grad)
     with torch.no_grad():
@@ -177,7 +200,6 @@ for __i in range(TRAINING_CFG['step_num'] * GRADIENT_CFG['accumulation_num']):
         __teacher_embeds = __teacher_embeds.detach()
 
     # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
-    __amp_ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16) if SCALER_CFG['enabled'] else torch.amp.autocast(device_type='cpu', enabled=False)
     with __amp_ctx:
         __student_embeds = PREFIX_MOD(__bytes_arr)
         __student_out = ORIGIN_MOD(
@@ -212,7 +234,6 @@ for __i in range(TRAINING_CFG['step_num'] * GRADIENT_CFG['accumulation_num']):
         __step += 1
 
 # save prefix weights
-__dir = os.path.dirname(SAVE_PATH)
-os.makedirs(__dir, exist_ok=True)
-torch.save({'config': PREFIX_MOD._config, 'state_dict': PREFIX_MOD.state_dict()}, SAVE_PATH)
-print(f"[train] saved prefix to {SAVE_PATH}")
+os.makedirs(os.path.dirname(OUTPUT_CFG['save_path']), exist_ok=True)
+torch.save({'config': PREFIX_MOD._config, 'state_dict': PREFIX_MOD.state_dict()}, OUTPUT_CFG['save_path'])
+print(f"[train] saved prefix to {OUTPUT_CFG['save_path']}")
