@@ -28,6 +28,7 @@ import torch.nn
 import transformers
 
 import deformers.layers.prefix
+import deformers.models.generic
 import deformers.pipelines.patching
 import deformers.tokenizers.byte
 
@@ -118,27 +119,33 @@ def embed_tokens(model: torch.nn.Module, input_ids: torch.Tensor) -> torch.Tenso
 
 # DATASET ######################################################################
 
-print('[init] downloading dataset...')
+print('[init] downloading the dataset...')
 DATASET_OBJ = datasets.load_dataset(**DATASET_CFG)
 
-print('[init] preprocessing dataset...')
+print('[init] preprocessing the dataset...')
 DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed']).iter(batch_size=BATCH_CFG['batch_dim'])
 
 # TOKENIZERS ###################################################################
 
-print('[init] loading tokenizers...')
+print('[init] loading the tokenizers...')
 TEXT_TOK = transformers.AutoTokenizer.from_pretrained(**TOKEN_CFG)
 BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(encoding=MAIN_CFG['encoding'])
 
 # MODELS #######################################################################
 
-print('[init] loading models...')
-ORIGIN_MOD = transformers.AutoModelForCausalLM.from_pretrained(**MODEL_CFG).to(device=MAIN_CFG['device'])
+print('[init] loading the models...')
+SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(**MODEL_CFG).to(device=MAIN_CFG['device'])
 PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device'])
 
-print('[init] freezing teacher...')
-ORIGIN_MOD.eval()
-freeze_model(ORIGIN_MOD)
+print('[init] freezing the teacher...')
+SOURCE_MOD.eval()
+freeze_model(SOURCE_MOD)
+
+print('[init] truncating the teacher...')
+SOURCE_MOD = deformers.models.generic.truncate_at(SOURCE_MOD, layer_num=MAIN_CFG['depth_num'])
+
+print('[init] freeing the unused layers...')
+deformers.models.generic.free_memory()
 
 print('[init] building the student...')
 PREFIX_MOD._build(
@@ -194,27 +201,22 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
 
         # teacher forward: get original embeddings and hidden states (no grad)
         with torch.no_grad():
-            __teacher_embeds = embed_tokens(ORIGIN_MOD, __tokens_arr)
-            __teacher_out = ORIGIN_MOD(
+            __teacher_embeds = embed_tokens(SOURCE_MOD, __tokens_arr)
+            __teacher_residuals = SOURCE_MOD.model(
                 input_ids=__tokens_arr,
                 attention_mask=__mask_arr,
-                output_hidden_states=True,
-                use_cache=False)
-            __teacher_hidden_k = __teacher_out.hidden_states[MAIN_CFG['depth_num']].detach()
-            __teacher_embeds = __teacher_embeds.detach()
+                use_cache=False).last_hidden_state
 
         # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
         with __amp_ctx:
             __student_embeds = PREFIX_MOD(__bytes_arr)
-            __student_out = ORIGIN_MOD(
+            __student_residuals = SOURCE_MOD.model(
                 inputs_embeds=__student_embeds,
                 attention_mask=__mask_arr,
-                output_hidden_states=True,
-                use_cache=False)
-            __student_hidden_k = __student_out.hidden_states[MAIN_CFG['depth_num']]
+                use_cache=False).last_hidden_state
 
             # hidden-state MSE at depth k
-            __loss_hidden = torch.nn.functional.mse_loss(__student_hidden_k, __teacher_hidden_k)
+            __loss_hidden = torch.nn.functional.mse_loss(__student_residuals, __teacher_residuals)
             # optional embedding MSE warmup
             __loss_embed = torch.nn.functional.mse_loss(__student_embeds.float(), __teacher_embeds.float())
             # total loss
