@@ -169,7 +169,10 @@ OPTIMIZER_OBJ.zero_grad()
 # TRAINING #####################################################################
 
 for __epoch in range(TRAINING_CFG['epoch_num']):
-    for __batch in iter(DATASET_OBJ):
+    # create a new iterator since the previous one was exhausted
+    __dataset = iter(DATASET_OBJ)
+
+    for __batch in __dataset:
         # sample a batch
         __texts = __batch['text']
 
