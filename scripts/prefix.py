@@ -140,6 +140,11 @@ print('[init] freezing teacher...')
 ORIGIN_MOD.eval()
 freeze_model(ORIGIN_MOD)
 
+print('[init] building the student...')
+PREFIX_MOD._build(
+    shape_arr=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
+    device_str=MAIN_CFG['device'])
+
 # OPTIMIZER ####################################################################
 
 print('[init] creating optimizer...')
