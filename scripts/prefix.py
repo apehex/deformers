@@ -37,8 +37,11 @@ MAIN_CFG = {
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'encoding': 'utf-8',
     'seed': 1337,
+    'batch_dim': 32,
+    'sequence_dim': 256,
     'patch_dim': 32,
-    'depth_num': 4,}
+    'depth_num': 4,
+    'epoch_num': 256,}
 
 # DATA CONFIG ##################################################################
 
@@ -49,8 +52,8 @@ DATASET_CFG = {
     'streaming': False,}
 
 BATCH_CFG = {
-    'batch_dim': 4,
-    'sequence_dim': 256,
+    'batch_dim': MAIN_CFG['batch_dim'],
+    'sequence_dim': MAIN_CFG['sequence_dim'],
     'patch_dim': MAIN_CFG['patch_dim'],}
 
 # PREPROCESSING CONFIG #########################################################
@@ -78,7 +81,7 @@ PREFIX_CFG = {
 # TRAINING CONFIG ##############################################################
 
 TRAINING_CFG = {
-    'step_num': 256,}
+    'epoch_num': MAIN_CFG['epoch_num'],}
 
 OPTIMIZER_CFG = {
     'lr': 3e-4,}
@@ -87,7 +90,8 @@ SCALER_CFG = {
     'enabled': MAIN_CFG['device'] == 'cuda',}
 
 GRADIENT_CFG = {
-    'accumulation_num': 4,}
+    'accumulation_num': 4,
+    'max_norm': 1.0,}
 
 LOSS_CFG = {
     'hidden_rate': 1.0,
@@ -112,17 +116,13 @@ def embed_tokens(model: torch.nn.Module, input_ids: torch.Tensor) -> torch.Tenso
     """Return the embedding layer output for the given token ids."""
     return model.model.embed_tokens(input_ids)
 
-def load_texts(dataset_obj: object, sample_num: int=512) -> list:
-    """Load a small text dataset for prefix training."""
-    return [
-        __r['text']
-        for __r in dataset_obj
-        if len(__r['text'].strip()) > 64][:sample_num]
-
 # DATASET ######################################################################
 
-print('[train] downloading dataset...')
+print('[init] downloading dataset...')
 DATASET_OBJ = datasets.load_dataset(**DATASET_CFG)
+
+print('[init] preprocessing dataset...')
+DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed']).iter(batch_size=BATCH_CFG['batch_dim'])
 
 # TOKENIZERS ###################################################################
 
@@ -140,97 +140,97 @@ print('[init] freezing teacher...')
 ORIGIN_MOD.eval()
 freeze_model(ORIGIN_MOD)
 
-# TRAINING #####################################################################
+# OPTIMIZER ####################################################################
 
 print('[init] creating optimizer...')
 OPTIMIZER_OBJ = torch.optim.AdamW(PREFIX_MOD.parameters(), **OPTIMIZER_CFG)
 SCALER_OBJ = torch.amp.GradScaler(**SCALER_CFG)
 
-print('[init] loading data...')
-TEXT_ARR = load_texts(dataset_obj=DATASET_OBJ, sample_num=TRAINING_CFG['step_num'] * BATCH_CFG['batch_dim'])
+# INIT #########################################################################
 
-# TRAINING #####################################################################
-
-print('[train] starting training loop...')
+print('[init] zeroing the state...')
 __step = 0
 __accum_loss = 0.0
 
 OPTIMIZER_OBJ.zero_grad()
 
-for __i in range(TRAINING_CFG['step_num'] * GRADIENT_CFG['accumulation_num']):
-    # sample a batch
-    __batch_start = (__i * BATCH_CFG['batch_dim']) % max(1, len(TEXT_ARR) - BATCH_CFG['batch_dim'])
-    __batch_texts = TEXT_ARR[__batch_start: __batch_start + BATCH_CFG['batch_dim']]
+# TRAINING #####################################################################
 
-    # tokenize the batch
-    __inputs = TEXT_TOK(
-        __batch_texts,
-        return_offsets_mapping=True,
-        max_length=BATCH_CFG['sequence_dim'],
-        truncation='longest_first',
-        padding='max_length')
+for __epoch in range(TRAINING_CFG['epoch_num']):
+    for __batch in DATASET_OBJ:
+        # sample a batch
+        __texts = __batch['text']
 
-    # encode: input_ids (B, T), attention_mask (B, T), byte_ids (B, T, G)
-    __encoded = deformers.pipelines.patching.tokenize_into_bytes(
-        texts_arr=__batch_texts,
-        offsets_arr=__inputs['offset_mapping'],
-        patch_dim=BATCH_CFG['patch_dim'],
-        tokenizer_obj=BYTE_TOK)
+        # input_ids (B, T) and attention_mask (B, T)
+        __inputs = TEXT_TOK(
+            __texts,
+            return_offsets_mapping=True,
+            max_length=BATCH_CFG['sequence_dim'],
+            truncation='longest_first',
+            padding='max_length')
 
-    # format as tensors
-    __tokens_arr = torch.tensor(__inputs['input_ids'], dtype=torch.long, device=MAIN_CFG['device'])
-    __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.long, device=MAIN_CFG['device'])
-    __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=MAIN_CFG['device'])
+        # byte patches (B, T, G)
+        __encoded = deformers.pipelines.patching.tokenize_into_bytes(
+            texts_arr=__texts,
+            offsets_arr=__inputs['offset_mapping'],
+            patch_dim=BATCH_CFG['patch_dim'],
+            tokenizer_obj=BYTE_TOK)
 
-    # mixed precision
-    __amp_ctx = (
-        torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
-        if SCALER_CFG['enabled']
-        else contextlib.nullcontext())
+        # format as tensors
+        __tokens_arr = torch.tensor(__inputs['input_ids'], dtype=torch.long, device=MAIN_CFG['device'])
+        __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.long, device=MAIN_CFG['device'])
+        __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=MAIN_CFG['device'])
 
-    # teacher forward: get original embeddings and hidden states (no grad)
-    with torch.no_grad():
-        __teacher_embeds = embed_tokens(ORIGIN_MOD, __tokens_arr)
-        __teacher_out = ORIGIN_MOD(
-            input_ids=__tokens_arr,
-            attention_mask=__mask_arr,
-            output_hidden_states=True,
-            use_cache=False)
-        __teacher_hidden_k = __teacher_out.hidden_states[MAIN_CFG['depth_num']].detach()
-        __teacher_embeds = __teacher_embeds.detach()
+        # mixed precision
+        __amp_ctx = (
+            torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
+            if SCALER_CFG['enabled']
+            else contextlib.nullcontext())
 
-    # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
-    with __amp_ctx:
-        __student_embeds = PREFIX_MOD(__bytes_arr)
-        __student_out = ORIGIN_MOD(
-            inputs_embeds=__student_embeds,
-            attention_mask=__mask_arr,
-            output_hidden_states=True,
-            use_cache=False)
-        __student_hidden_k = __student_out.hidden_states[MAIN_CFG['depth_num']]
+        # teacher forward: get original embeddings and hidden states (no grad)
+        with torch.no_grad():
+            __teacher_embeds = embed_tokens(ORIGIN_MOD, __tokens_arr)
+            __teacher_out = ORIGIN_MOD(
+                input_ids=__tokens_arr,
+                attention_mask=__mask_arr,
+                output_hidden_states=True,
+                use_cache=False)
+            __teacher_hidden_k = __teacher_out.hidden_states[MAIN_CFG['depth_num']].detach()
+            __teacher_embeds = __teacher_embeds.detach()
 
-        # hidden-state MSE at depth k
-        __loss_hidden = torch.nn.functional.mse_loss(__student_hidden_k, __teacher_hidden_k)
-        # optional embedding MSE warmup
-        __loss_embed = torch.nn.functional.mse_loss(__student_embeds.float(), __teacher_embeds.float())
-        __loss = LOSS_CFG['hidden_rate'] * __loss_hidden + LOSS_CFG['embed_rate'] * __loss_embed
-        __loss = __loss / GRADIENT_CFG['accumulation_num']
+        # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
+        with __amp_ctx:
+            __student_embeds = PREFIX_MOD(__bytes_arr)
+            __student_out = ORIGIN_MOD(
+                inputs_embeds=__student_embeds,
+                attention_mask=__mask_arr,
+                output_hidden_states=True,
+                use_cache=False)
+            __student_hidden_k = __student_out.hidden_states[MAIN_CFG['depth_num']]
 
-    SCALER_OBJ.scale(__loss).backward()
-    __accum_loss += __loss.item() * GRADIENT_CFG['accumulation_num']
+            # hidden-state MSE at depth k
+            __loss_hidden = torch.nn.functional.mse_loss(__student_hidden_k, __teacher_hidden_k)
+            # optional embedding MSE warmup
+            __loss_embed = torch.nn.functional.mse_loss(__student_embeds.float(), __teacher_embeds.float())
+            # total loss
+            __loss = LOSS_CFG['hidden_rate'] * __loss_hidden + LOSS_CFG['embed_rate'] * __loss_embed
+            __loss = __loss / GRADIENT_CFG['accumulation_num']
 
-    # optimizer step after gradient accumulation
-    if (__i + 1) % GRADIENT_CFG['accumulation_num'] == 0:
-        SCALER_OBJ.unscale_(OPTIMIZER_OBJ)
-        torch.nn.utils.clip_grad_norm_(PREFIX_MOD.parameters(), max_norm=1.0)
-        SCALER_OBJ.step(OPTIMIZER_OBJ)
-        SCALER_OBJ.update()
-        OPTIMIZER_OBJ.zero_grad()
+        SCALER_OBJ.scale(__loss).backward()
+        __accum_loss += __loss.item() * GRADIENT_CFG['accumulation_num']
 
-        if __step % LOGGING_CFG['step_num'] == 0:
-            print(f"[train] step={__step:04d} loss={__accum_loss / LOGGING_CFG['step_num']:.6f}")
+        # optimizer step after gradient accumulation
+        if (__step + 1) % GRADIENT_CFG['accumulation_num'] == 0:
+            SCALER_OBJ.unscale_(OPTIMIZER_OBJ)
+            torch.nn.utils.clip_grad_norm_(PREFIX_MOD.parameters(), max_norm=GRADIENT_CFG['max_norm'])
+            SCALER_OBJ.step(OPTIMIZER_OBJ)
+            SCALER_OBJ.update()
+            OPTIMIZER_OBJ.zero_grad()
+
+            print(f"[train] step={__step:04d} loss={__accum_loss / GRADIENT_CFG['accumulation_num']:.6f}")
             __accum_loss = 0.0
 
+        # track the global step (across epochs)
         __step += 1
 
 # save prefix weights
