@@ -1,3 +1,4 @@
+import copy
 import gc
 
 import torch
@@ -46,7 +47,7 @@ def copy_prefix(
     # wrapper with the first N hidden layers, pointing at the parent weights
     return __child
 
-def truncate_at(
+def truncate_model(
     model_obj: object,
     layer_num: int,
 ) -> object:
@@ -62,3 +63,19 @@ def truncate_at(
         model_obj.config.layer_types = __model.config.layer_types
     # return the wrapper, with the head
     return model_obj
+
+def truncate_config(
+    config_dict: dict[str, object],
+    layer_num: int,
+) -> dict[str, object]:
+    # copy the original config
+    __config = dict(config_dict)
+    # sanitize the layer count
+    __config['num_hidden_layers'] = min(
+        __config.get('num_hidden_layers', max(1, int(layer_num))),
+        max(1, int(layer_num)))
+    # keep only the relevant layer types
+    if 'layer_types' in __config.keys():
+        __config['layer_types'] = list(__config['layer_types'][:layer_num])
+    # base dict[str, object]
+    return __config
