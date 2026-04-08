@@ -23,30 +23,6 @@ def free_memory(
 
 # PREFIX #######################################################################
 
-def copy_prefix(
-    parent_obj: object,
-    layer_num: int
-) -> object:
-    # init from the config
-    __child = parent_obj.__class__(parent_obj.config)
-    # share decoder core
-    __child.model.embed_tokens = parent_obj.model.embed_tokens
-    __child.model.norm = parent_obj.model.norm
-    __child.model.rotary_emb = parent_obj.model.rotary_emb
-    # share prefix layers (same objects)
-    __child.model.layers = torch.nn.ModuleList(parent_obj.model.layers[:layer_num])
-    # keep LM head
-    __child.lm_head = parent_obj.lm_head
-    # config hygiene
-    __child.model.config.num_hidden_layers = layer_num
-    __child.config.num_hidden_layers = layer_num
-    # layer types
-    if getattr(__child.config, "layer_types", None) is not None:
-        __child.config.layer_types = __child.config.layer_types[:layer_num]
-        __child.model.config.layer_types = __child.config.layer_types
-    # wrapper with the first N hidden layers, pointing at the parent weights
-    return __child
-
 def truncate_model(
     model_obj: object,
     layer_num: int,
