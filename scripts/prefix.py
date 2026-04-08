@@ -22,6 +22,7 @@ import contextlib
 import os
 
 import datasets
+import huggingface_hub
 import torch
 import torch.amp
 import torch.nn
@@ -35,9 +36,10 @@ import deformers.tokenizers.byte
 # COMMON CONFIG ################################################################
 
 MAIN_CFG = {
-    'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-    'encoding': 'utf-8',
-    'seed': 1337,
+    'model_str': 'qwen/qwen3.5-9b',
+    'device_str': 'cuda' if torch.cuda.is_available() else 'cpu',
+    'encoding_str': 'utf-8',
+    'seed_num': 1337,
     'batch_dim': 32,
     'sequence_dim': 256,
     'patch_dim': 32,
@@ -60,18 +62,23 @@ BATCH_CFG = {
 # PREPROCESSING CONFIG #########################################################
 
 TOKEN_CFG = {
-    'pretrained_model_name_or_path': 'qwen/qwen3.5-9b',
+    'pretrained_model_name_or_path': MAIN_CFG['model_str'],
     'use_fast': True,}
 
 BYTE_CFG = {
-    'encoding': MAIN_CFG['encoding'],}
+    'encoding': MAIN_CFG['encoding_str'],}
 
 # MODEL CONFIG #################################################################
 
+DOWNLOAD_CFG = {
+    'repo_id': MAIN_CFG['model_str'],
+    'repo_type': 'model',
+    'ignore_patterns': ['*.onnx', '*.tflite', '*.msgpack'],}
+
 MODEL_CFG = {
-    'pretrained_model_name_or_path': 'qwen/qwen3.5-9b',
-    'device_map': MAIN_CFG['device'],
-    'torch_dtype': torch.bfloat16,}
+    'pretrained_model_name_or_path': MAIN_CFG['model_str'],
+    'device_map': MAIN_CFG['device_str'],
+    'dtype': torch.bfloat16,}
 
 PREFIX_CFG = {
     'embed_dim': 4096 // BATCH_CFG['patch_dim'],
@@ -88,7 +95,7 @@ OPTIMIZER_CFG = {
     'lr': 3e-4,}
 
 SCALER_CFG = {
-    'enabled': MAIN_CFG['device'] == 'cuda',}
+    'enabled': MAIN_CFG['device_str'] == 'cuda',}
 
 GRADIENT_CFG = {
     'accumulation_num': 4,
@@ -123,19 +130,19 @@ print('[init] downloading the dataset...')
 DATASET_OBJ = datasets.load_dataset(**DATASET_CFG)
 
 print('[init] preprocessing the dataset...')
-DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed']).iter(batch_size=BATCH_CFG['batch_dim'])
+DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed_num'])
 
 # TOKENIZERS ###################################################################
 
 print('[init] loading the tokenizers...')
 TEXT_TOK = transformers.AutoTokenizer.from_pretrained(**TOKEN_CFG)
-BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(encoding=MAIN_CFG['encoding'])
+BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(**BYTE_CFG)
 
 # MODELS #######################################################################
 
 print('[init] loading the models...')
-SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(**MODEL_CFG).to(device=MAIN_CFG['device'])
-PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device'])
+SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(**MODEL_CFG).to(device=MAIN_CFG['device_str'])
+PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
 
 print('[init] freezing the teacher...')
 SOURCE_MOD.eval()
@@ -150,7 +157,7 @@ deformers.models.generic.free_memory()
 print('[init] building the student...')
 PREFIX_MOD._build(
     shape_arr=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
-    device_str=MAIN_CFG['device'])
+    device_str=MAIN_CFG['device_str'])
 
 # OPTIMIZER ####################################################################
 
@@ -170,10 +177,10 @@ OPTIMIZER_OBJ.zero_grad()
 
 for __epoch in range(TRAINING_CFG['epoch_num']):
     # create a new iterator since the previous one was exhausted
-    __dataset = iter(DATASET_OBJ)
+    __dataset = DATASET_OBJ.iter(batch_size=BATCH_CFG['batch_dim'])
 
+    # iterate on batches
     for __batch in __dataset:
-        # sample a batch
         __texts = __batch['text']
 
         # input_ids (B, T) and attention_mask (B, T)
@@ -192,9 +199,9 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             tokenizer_obj=BYTE_TOK)
 
         # format as tensors
-        __tokens_arr = torch.tensor(__inputs['input_ids'], dtype=torch.long, device=MAIN_CFG['device'])
-        __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.long, device=MAIN_CFG['device'])
-        __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=MAIN_CFG['device'])
+        __tokens_arr = torch.tensor(__inputs['input_ids'], dtype=torch.long, device=MAIN_CFG['device_str'])
+        __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.long, device=MAIN_CFG['device_str'])
+        __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=MAIN_CFG['device_str'])
 
         # mixed precision
         __amp_ctx = (
