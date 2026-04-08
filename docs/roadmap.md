@@ -162,6 +162,103 @@ Objective: align patched model with original model.
 
 ---
 
+# Phase 5 - Latent Sequence Modeling (Experimental)
+
+Objective: replace token-level modeling with latent sequence modeling over byte representations.
+
+### Motivation
+
+Tokenization provides a good factorization of language by aligning segments with statistical boundaries.
+
+Fixed-size byte patching introduces artificial dependencies across positions:
+
+- a byte block may partially determine the next block
+- this reduces sampling flexibility
+- this increases inter-token mutual information
+
+This phase explores learning a latent representation that restores a better factorization while keeping byte-level inputs.
+
+### Architecture
+
+Two-stage model:
+
+1. Variational Autoencoder `V`
+   - input: byte sequences (fixed length per token or patch)
+   - output: latent sequence `z`
+
+2. Autoregressive model `W`
+   - operates on latent sequence `z`
+   - predicts `z_t` given `z_<t`
+
+Inference:
+
+1. sample latent sequence autoregressively
+2. decode full sequence with VAE decoder (non-causal)
+
+Optional extensions:
+
+- masked or non-causal decoding
+- diffusion-based refinement in latent or output space
+
+### Latent Space Requirements
+
+The latent representation must satisfy:
+
+#### Factorization
+
+- `p(z_t | z_<t)` must be predictable
+- low conditional entropy across positions
+
+#### Locality
+
+- small changes in latent space produce small changes in output
+
+#### Compositionality
+
+- each latent corresponds to a local region of the sequence
+
+#### Redundancy
+
+- representation must tolerate inconsistencies
+- decoder can correct errors globally
+
+#### Independence
+
+- reduce mutual information between adjacent latents
+- improve sampling flexibility compared to byte patches
+
+### Training
+
+Stage 1 — VAE training
+
+- reconstruction loss on byte sequences
+- regularization of latent space (KL)
+
+Stage 2 — Latent AR training
+
+- train autoregressive model on latent sequences
+
+Stage 3 — Optional refinement
+
+- train decoder to correct noisy or inconsistent latent sequences
+- optional diffusion or denoising objectives
+
+### Evaluation
+
+- reconstruction quality (bytes → bytes)
+- predictability of latent sequence
+- mutual information between latent positions
+- generation quality after decoding
+- comparison with token-based baseline
+
+### Status
+
+Exploratory research direction.
+
+Not required for prefix/suffix patching pipeline.
+
+---
+
 # Open Questions
 
 ## Prefix
