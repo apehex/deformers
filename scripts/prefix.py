@@ -159,18 +159,14 @@ os.makedirs(os.path.dirname(OUTPUT_CFG['save_path']), exist_ok=True)
 print('[init] downloading the teacher...')
 huggingface_hub.snapshot_download(**DOWNLOAD_CFG)
 
-print('[init] lading the config...')
-TRUNK_CFG = transformers.AutoConfig.from_pretrained(**CONFIG_CFG).to_dict()
+print('[init] loading the config...')
+TRUNK_CFG = transformers.AutoConfig.from_pretrained(**CONFIG_CFG)
 
 print('[init] truncating the config...')
-TRUNK_CFG = deformers.models.generic.truncate_config(TRUNK_CFG, layer_num=MAIN_CFG['depth_num'])
-TRUNK_CFG = transformers.PreTrainedConfig.from_dict(TRUNK_CFG)
+TRUNK_CFG = deformers.models.generic.truncate_config(TRUNK_CFG, layer_num=MAIN_CFG['depth_num'], target_key='text_config')
 
-print('[init] creating the teacher...')
-SOURCE_MOD = transformers.AutoModelForCausalLM.from_config(TRUNK_CFG)
-
-print('[init] loading the weights...') # load only the used layers, up to the chose depth
-SOURCE_MOD = SOURCE_MOD.from_pretrained(config=TRUNK_CFG, **MODEL_CFG).to(device=MAIN_CFG['device_str'])
+print('[init] loading the teacher...') # load only the used layers, up to the chose depth
+SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(config=TRUNK_CFG, **MODEL_CFG).to(device=MAIN_CFG['device_str'])
 
 print('[init] freezing the teacher...')
 SOURCE_MOD.eval()
