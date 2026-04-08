@@ -163,7 +163,7 @@ print('[init] lading the config...')
 TRUNK_CFG = transformers.AutoConfig.from_pretrained(**CONFIG_CFG).to_dict()
 
 print('[init] truncating the config...')
-TRUNK_CFG = deformes.models.generic.truncate_config(TRUNK_CFG, layer_num=MAIN_CFG['depth_num'])
+TRUNK_CFG = deformers.models.generic.truncate_config(TRUNK_CFG, layer_num=MAIN_CFG['depth_num'])
 TRUNK_CFG = transformers.PreTrainedConfig.from_dict(TRUNK_CFG)
 
 print('[init] creating the teacher...')
@@ -196,7 +196,7 @@ print('[init] creating optimizer...')
 OPTIMIZER_OBJ = torch.optim.AdamW(PREFIX_MOD.parameters(), **OPTIMIZER_CFG)
 SCALER_OBJ = torch.amp.GradScaler(**SCALER_CFG)
 
-# INIT #########################################################################
+# ZERO #########################################################################
 
 print('[init] zeroing the state...')
 __step = 0
