@@ -41,17 +41,19 @@ def truncate_model(
     return model_obj
 
 def truncate_config(
-    config_dict: dict[str, object],
+    config_obj: object,
     layer_num: int,
-) -> dict[str, object]:
-    # copy the original config
-    __config = dict(config_dict)
+    target_key: str='__dummy__',
+) -> object:
+    __config = copy.deepcopy(config_obj)
+    # get the sub-config or default to the full config
+    __target = getattr(__config, target_key, __config)
     # sanitize the layer count
-    __config['num_hidden_layers'] = min(
-        __config.get('num_hidden_layers', max(1, int(layer_num))),
+    __target.num_hidden_layers = min(
+        int(__target.num_hidden_layers),
         max(1, int(layer_num)))
     # keep only the relevant layer types
-    if 'layer_types' in __config.keys():
-        __config['layer_types'] = list(__config['layer_types'][:layer_num])
-    # base dict[str, object]
+    if hasattr(__target, 'layer_types'):
+        __target.layer_types = list(__target.layer_types[:__target.num_hidden_layers])
+    # return the full configuration (not just the targeted sub-config)
     return __config
