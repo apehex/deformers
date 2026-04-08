@@ -192,6 +192,12 @@ print('[init] creating optimizer...')
 OPTIMIZER_OBJ = torch.optim.AdamW(PREFIX_MOD.parameters(), **OPTIMIZER_CFG)
 SCALER_OBJ = torch.amp.GradScaler(**SCALER_CFG)
 
+print('[init] enabling mixed precision...')
+MIXED_CTX = (
+    torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
+    if SCALER_CFG['enabled']
+    else contextlib.nullcontext())
+
 # ZERO #########################################################################
 
 print('[init] zeroing the state...')
@@ -230,22 +236,16 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.long, device=MAIN_CFG['device_str'])
         __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=MAIN_CFG['device_str'])
 
-        # mixed precision
-        __amp_ctx = (
-            torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
-            if SCALER_CFG['enabled']
-            else contextlib.nullcontext())
-
         # teacher forward: get original embeddings and hidden states (no grad)
         with torch.no_grad():
             __teacher_embeds = embed_tokens(SOURCE_MOD, __tokens_arr)
             __teacher_residuals = SOURCE_MOD.model(
-                input_ids=__tokens_arr,
+                inputs_embeds=__teacher_embeds,
                 attention_mask=__mask_arr,
                 use_cache=False).last_hidden_state
 
         # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
-        with __amp_ctx:
+        with MIXED_CTX:
             __student_embeds = PREFIX_MOD(__bytes_arr)
             __student_residuals = SOURCE_MOD.model(
                 inputs_embeds=__student_embeds,
