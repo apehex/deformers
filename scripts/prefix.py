@@ -73,12 +73,24 @@ BYTE_CFG = {
 DOWNLOAD_CFG = {
     'repo_id': MAIN_CFG['model_str'],
     'repo_type': 'model',
+    'local_dir': os.path.abspath('downloads'),
     'ignore_patterns': ['*.onnx', '*.tflite', '*.msgpack'],}
 
+CONFIG_CFG = {
+    'pretrained_model_name_or_path': DOWNLOAD_CFG['local_dir'],
+    'trust_remote_code': False,}
+
+# MODEL_CFG = {
+#     'pretrained_model_name_or_path': MAIN_CFG['model_str'],
+#     'device_map': MAIN_CFG['device_str'],
+#     'dtype': torch.bfloat16,}
+
 MODEL_CFG = {
-    'pretrained_model_name_or_path': MAIN_CFG['model_str'],
-    'device_map': MAIN_CFG['device_str'],
-    'dtype': torch.bfloat16,}
+    'pretrained_model_name_or_path': DOWNLOAD_CFG['local_dir'],
+    'trust_remote_code': CONFIG_CFG['trust_remote_code'],
+    'torch_dtype': torch.bfloat16,
+    'low_cpu_mem_usage': True,
+    'ignore_mismatched_sizes': True,}
 
 PREFIX_CFG = {
     'embed_dim': 4096 // BATCH_CFG['patch_dim'],
@@ -111,7 +123,7 @@ LOGGING_CFG = {
     'step_num': 32,}
 
 OUTPUT_CFG = {
-    'save_path': 'checkpoints/prefix.pt',}
+    'save_path': os.path.abspath('checkpoints/prefix.pt'),}
 
 # UTILS ########################################################################
 
@@ -140,16 +152,35 @@ BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(**BYTE_CFG)
 
 # MODELS #######################################################################
 
-print('[init] loading the models...')
-SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(**MODEL_CFG).to(device=MAIN_CFG['device_str'])
-PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
+print('[init] creating the output directories...')
+os.makedirs(DOWNLOAD_CFG['local_dir'], exist_ok=True)
+os.makedirs(os.path.dirname(OUTPUT_CFG['save_path']), exist_ok=True)
+
+print('[init] downloading the teacher...')
+huggingface_hub.snapshot_download(**DOWNLOAD_CFG)
+
+print('[init] lading the config...')
+TRUNK_CFG = transformers.AutoConfig.from_pretrained(**CONFIG_CFG).to_dict()
+
+print('[init] truncating the config...')
+TRUNK_CFG = deformes.models.generic.truncate_config(TRUNK_CFG, layer_num=MAIN_CFG['depth_num'])
+TRUNK_CFG = transformers.PreTrainedConfig.from_dict(TRUNK_CFG)
+
+print('[init] creating the teacher...')
+SOURCE_MOD = transformers.AutoModelForCausalLM.from_config(TRUNK_CFG)
+
+print('[init] loading the weights...') # load only the used layers, up to the chose depth
+SOURCE_MOD = SOURCE_MOD.from_pretrained(config=TRUNK_CFG, **MODEL_CFG).to(device=MAIN_CFG['device_str'])
 
 print('[init] freezing the teacher...')
 SOURCE_MOD.eval()
 freeze_model(SOURCE_MOD)
 
-print('[init] truncating the teacher...')
-SOURCE_MOD = deformers.models.generic.truncate_at(SOURCE_MOD, layer_num=MAIN_CFG['depth_num'])
+print('[init] creating the student...')
+PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
+
+# print('[init] truncating the teacher...')
+# SOURCE_MOD = deformers.models.generic.truncate_model(SOURCE_MOD, layer_num=MAIN_CFG['depth_num'])
 
 print('[init] freeing the unused layers...')
 deformers.models.generic.free_memory()
@@ -251,6 +282,5 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __step += 1
 
 # save prefix weights
-os.makedirs(os.path.dirname(OUTPUT_CFG['save_path']), exist_ok=True)
 torch.save({'config': PREFIX_MOD._config, 'state_dict': PREFIX_MOD.state_dict()}, OUTPUT_CFG['save_path'])
 print(f"[train] saved prefix to {OUTPUT_CFG['save_path']}")
