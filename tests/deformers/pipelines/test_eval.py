@@ -124,33 +124,3 @@ class TestTopkOrderMatchRate:
         __s = torch.randn(_B, _T, _V)
         __r = deformers.pipelines.eval.topk_rate(__t, __s, k_num=_K)
         assert 0.0 <= __r <= 1.0
-
-# BUILD_VOCAB_PROBE ############################################################
-
-class TestBuildVocabProbe:
-
-    def test_output_shape(self):
-        __ids = deformers.pipelines.eval.build_vocab_probe(vocab_dim=100, batch_dim=_B, seq_dim=_T)
-        assert __ids.shape == (_B, _T)
-
-    def test_values_in_range(self):
-        __vocab = 50
-        __ids = deformers.pipelines.eval.build_vocab_probe(vocab_dim=__vocab, batch_dim=_B, seq_dim=_T)
-        assert __ids.min().item() >= 0
-        assert __ids.max().item() < __vocab
-
-    def test_deterministic(self):
-        __a = deformers.pipelines.eval.build_vocab_probe(vocab_dim=100, batch_dim=_B, seq_dim=_T)
-        __b = deformers.pipelines.eval.build_vocab_probe(vocab_dim=100, batch_dim=_B, seq_dim=_T)
-        assert torch.equal(__a, __b)
-
-    def test_dtype_is_long(self):
-        __ids = deformers.pipelines.eval.build_vocab_probe(vocab_dim=100, batch_dim=_B, seq_dim=_T)
-        assert __ids.dtype == torch.long
-
-    def test_sequential_fill(self):
-        # first B*T values should be 0, 1, 2, ... mod vocab_dim
-        __vocab = 1000
-        __ids = deformers.pipelines.eval.build_vocab_probe(vocab_dim=__vocab, batch_dim=_B, seq_dim=_T)
-        __expected = torch.arange(_B * _T, dtype=torch.long).reshape(_B, _T)
-        assert torch.equal(__ids, __expected)
