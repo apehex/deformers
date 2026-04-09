@@ -211,42 +211,42 @@ MIXED_CTX = (
 
 # DATASET ######################################################################
 
-print('[eval] downloading the dataset...')
+print('[init] downloading the dataset...')
 DATASET_OBJ = datasets.load_dataset(**DATASET_CFG)
 
-print('[eval] preprocessing the dataset...')
+print('[init] preprocessing the dataset...')
 DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed_num'])
 
 # TOKENIZERS ###################################################################
 
-print('[eval] loading the tokenizers...')
+print('[init] loading the tokenizers...')
 TEXT_TOK = transformers.AutoTokenizer.from_pretrained(**TOKEN_CFG)
 BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(**BYTE_CFG)
 
 # MODELS #######################################################################
 
-print('[eval] creating the output directories...')
+print('[init] creating the output directories...')
 os.makedirs(DOWNLOAD_CFG['local_dir'], exist_ok=True)
 
-print('[eval] downloading the teacher...')
+print('[init] downloading the teacher...')
 huggingface_hub.snapshot_download(**DOWNLOAD_CFG)
 
-print('[eval] loading the config...')
+print('[init] loading the config...')
 TRUNK_CFG = transformers.AutoConfig.from_pretrained(**CONFIG_CFG)
 
-print('[eval] truncating the config...')
+print('[init] truncating the config...')
 TRUNK_CFG = deformers.models.generic.truncate_config(
     TRUNK_CFG, layer_num=MAIN_CFG['depth_num'], target_key='text_config')
 
-print('[eval] loading the teacher...')  # load only the used layers up to the chosen depth
+print('[init] loading the teacher...')  # load only the used layers up to the chosen depth
 SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(
     config=TRUNK_CFG, **MODEL_CFG).to(device=MAIN_CFG['device_str'])
 
-print('[eval] freezing the teacher...')
+print('[init] freezing the teacher...')
 SOURCE_MOD.eval()
 freeze_model(SOURCE_MOD)
 
-print('[eval] freeing unused memory...')
+print('[init] freeing unused memory...')
 deformers.models.generic.free_memory()
 
 if REPOSITORY_CFG['repo_path']:
@@ -257,11 +257,11 @@ if REPOSITORY_CFG['repo_path']:
         local_dir=os.path.dirname(CHECKPOINT_CFG['file_path']),
         repo_type='model')
 
-print('[eval] loading the prefix weights...')
+print('[init] loading the prefix weights...')
 PREFIX_MOD = load_checkpoint(**CHECKPOINT_CFG)
 PREFIX_MOD.eval()
 
-print('[eval] building the prefix...')
+print('[init] building the prefix...')
 PREFIX_MOD._build(
     shape_arr=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
     device_str=MAIN_CFG['device_str'])
