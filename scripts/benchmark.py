@@ -219,15 +219,15 @@ for __batch in __dataset:
 
     with torch.no_grad():
         # teacher forward: embeddings, residuals and logits (no grad)
-        __teacher_embeds = deformers.pipelines.eval.teacher_embed(SOURCE_MOD, __tokens_arr)
-        __teacher_residuals, __teacher_logits = deformers.pipelines.eval.teacher_forward(
-            SOURCE_MOD, __teacher_embeds, __mask_arr)
+        __teacher_embeds = SOURCE_MOD.model.embed_tokens(__tokens_arr)
+        __teacher_residuals = SOURCE_MOD.model(inputs_embeds=__teacher_embeds, attention_mask=__mask_arr, use_cache=False).last_hidden_state
+        __teacher_logits = SOURCE_MOD.lm_head(__teacher_residuals)
 
         # student forward: prefix -> inputs_embeds -> trunk -> logits
         with MIXED_CTX:
             __student_embeds = PREFIX_MOD(__bytes_arr)
-            __student_residuals, __student_logits = deformers.pipelines.eval.teacher_forward(
-                SOURCE_MOD, __student_embeds, __mask_arr)
+        __student_residuals = SOURCE_MOD.model(inputs_embeds=__student_embeds, attention_mask=__mask_arr, use_cache=False).last_hidden_state
+        __student_logits = SOURCE_MOD.lm_head(__student_residuals)
 
     # accumulate metrics
     __sum_embed_mse += torch.nn.functional.mse_loss(__teacher_embeds.float(), __student_embeds.float()).item()
@@ -262,13 +262,13 @@ if EVAL_CFG['probe_sentences']:
         device_str=MAIN_CFG['device_str'])
 
     with torch.no_grad():
-        __p_teacher_embeds = deformers.pipelines.eval.teacher_embed(SOURCE_MOD, __probe_tokens)
-        __p_teacher_residuals, __p_teacher_logits = deformers.pipelines.eval.teacher_forward(
-            SOURCE_MOD, __p_teacher_embeds, __probe_mask)
+        __p_teacher_embeds = SOURCE_MOD.model.embed_tokens(__probe_tokens)
+        __p_teacher_residuals = SOURCE_MOD.model(inputs_embeds=__p_teacher_embeds, attention_mask=__probe_mask, use_cache=False).last_hidden_state
+        __p_teacher_logits = SOURCE_MOD.lm_head(__p_teacher_residuals)
         with MIXED_CTX:
             __p_student_embeds = PREFIX_MOD(__probe_bytes)
-            __p_student_residuals, __p_student_logits = deformers.pipelines.eval.teacher_forward(
-                SOURCE_MOD, __p_student_embeds, __probe_mask)
+            __p_student_residuals = SOURCE_MOD.model(inputs_embeds=__p_student_embeds, attention_mask=__probe_mask, use_cache=False).last_hidden_state
+            __p_student_logits = SOURCE_MOD.lm_head(__p_student_residuals)
 
     __k = EVAL_CFG['topk_num']
     for __i, __sent in enumerate(EVAL_CFG['probe_sentences']):
@@ -306,13 +306,13 @@ if EVAL_CFG['vocab_probe']:
     __vocab_mask = torch.ones_like(__vocab_ids)
 
     with torch.no_grad():
-        __v_teacher_embeds = deformers.pipelines.eval.teacher_embed(SOURCE_MOD, __vocab_ids)
-        __v_teacher_residuals, __v_teacher_logits = deformers.pipelines.eval.teacher_forward(
-            SOURCE_MOD, __v_teacher_embeds, __vocab_mask)
+        __v_teacher_embeds = SOURCE_MOD.model.embed_tokens(__vocab_ids)
+        __v_teacher_residuals = SOURCE_MOD.model(inputs_embeds=__v_teacher_embeds, attention_mask=__vocab_mask, use_cache=False).last_hidden_state
+        __v_teacher_logits = SOURCE_MOD.lm_head(__v_teacher_residuals)
         with MIXED_CTX:
             __v_student_embeds = PREFIX_MOD(__vocab_bytes)
-            __v_student_residuals, __v_student_logits = deformers.pipelines.eval.teacher_forward(
-                SOURCE_MOD, __v_student_embeds, __vocab_mask)
+            __v_student_residuals = SOURCE_MOD.model(inputs_embeds=__v_student_embeds, attention_mask=__vocab_mask, use_cache=False).last_hidden_state
+            __v_student_logits = SOURCE_MOD.lm_head(__v_student_residuals)
 
     print(f'[eval] vocab embed MSE   : {torch.nn.functional.mse_loss(__v_teacher_embeds.float(), __v_student_embeds.float()).item():.6f}')
     print(f'[eval] vocab hidden MSE  : {torch.nn.functional.mse_loss(__v_teacher_residuals.float(), __v_student_residuals.float()).item():.6f}')

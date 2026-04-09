@@ -102,39 +102,6 @@ def build_vocab_probe_bytes(
         tokenizer_obj=byte_tokenizer)
     return torch.tensor(__encoded, dtype=torch.long, device=vocab_ids.device)
 
-# TEACHER FORWARD ##############################################################
-
-def teacher_embed(
-    model: object,
-    input_ids: torch.Tensor,
-) -> torch.Tensor:
-    """Return the embedding layer output for the given token ids."""
-    return model.model.embed_tokens(input_ids)
-
-def teacher_forward(
-    model: object,
-    embeds: torch.Tensor,
-    attention_mask: torch.Tensor,
-) -> tuple:
-    """
-    Run teacher trunk and lm_head forward with inputs_embeds.
-
-    Returns:
-        residuals: (B, T, H) hidden states at the last configured layer
-        logits: (B, T, V) lm_head output
-
-    Assumptions:
-    - Model has .model(inputs_embeds=...) and .lm_head(...) interfaces.
-    - No gradient is tracked (call within torch.no_grad()).
-    """
-    __residuals = model.model(
-        inputs_embeds=embeds,
-        attention_mask=attention_mask,
-        use_cache=False).last_hidden_state
-    __logits = model.lm_head(__residuals)
-    return __residuals, __logits
-
-
 # CHECKPOINT ###################################################################
 
 def load_prefix_checkpoint(

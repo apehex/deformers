@@ -133,10 +133,6 @@ def freeze_model(model: torch.nn.Module) -> None:
     for __p in model.parameters():
         __p.requires_grad_(False)
 
-def embed_tokens(model: torch.nn.Module, input_ids: torch.Tensor) -> torch.Tensor:
-    """Return the embedding layer output for the given token ids."""
-    return model.model.embed_tokens(input_ids)
-
 # DATASET ######################################################################
 
 print('[init] downloading the dataset...')
@@ -239,7 +235,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
 
         # teacher forward: get original embeddings and hidden states (no grad)
         with torch.no_grad():
-            __teacher_embeds = embed_tokens(SOURCE_MOD, __tokens_arr)
+            __teacher_embeds = SOURCE_MOD.model.embed_tokens(__tokens_arr)
             __teacher_residuals = SOURCE_MOD.model(
                 inputs_embeds=__teacher_embeds,
                 attention_mask=__mask_arr,
