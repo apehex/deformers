@@ -27,8 +27,10 @@ def kl_divergence(
 ) -> torch.Tensor:
     """KL divergence KL(teacher || student) over (B, T, V) raw logits."""
     __shape = tuple(teacher_arr.shape)
+    # merge the batch axes
     __t = teacher_arr.float().reshape(math.prod(__shape[:-1]), __shape[-1])
     __s = student_arr.float().reshape(math.prod(__shape[:-1]), __shape[-1])
+    # reduced to a single value
     return torch.nn.functional.kl_div(
         torch.nn.functional.log_softmax(__s, dim=-1),
         torch.nn.functional.log_softmax(__t, dim=-1),
@@ -43,6 +45,7 @@ def topk_rate(
     """Fraction of (B, T) positions where teacher top-k and student top-k token sequences match exactly."""
     __t = teacher_arr.topk(k_num, dim=-1).indices
     __s = student_arr.topk(k_num, dim=-1).indices
+    # reduced to a scalar
     return (__t == __s).all(dim=-1).float().mean()
 
 # PROBES #######################################################################
@@ -101,34 +104,3 @@ def build_vocab_probe_bytes(
         patch_dim=patch_dim,
         tokenizer_obj=byte_tokenizer)
     return torch.tensor(__encoded, dtype=torch.long, device=vocab_ids.device)
-
-# CHECKPOINT ###################################################################
-
-def load_prefix_checkpoint(
-    local_path: str,
-    hf_repo: str='',
-    hf_filename: str='prefix.pt',
-    device_str: str='cpu',
-) -> object:
-    """
-    Load a CompositeBytePrefix from a local checkpoint or HF hub path.
-
-    Assumptions:
-    - Checkpoint format: dict with keys 'config' and 'state_dict'.
-    - local_path is required; hf_repo is optional override.
-    - If hf_repo is non-empty, downloads the file and uses that path instead.
-    """
-    __path = local_path
-    if hf_repo:
-        import huggingface_hub
-        __path = huggingface_hub.hf_hub_download(
-            repo_id=hf_repo,
-            filename=hf_filename,
-            repo_type='model')
-    if not os.path.isfile(__path):
-        raise FileNotFoundError(f'prefix checkpoint not found: {__path}')
-    __ckpt = torch.load(__path, map_location=device_str, weights_only=True)
-    __prefix = deformers.layers.prefix.CompositeBytePrefix(**__ckpt['config'])
-    __prefix.load_state_dict(__ckpt['state_dict'])
-    __prefix.eval()
-    return __prefix

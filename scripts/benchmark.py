@@ -97,9 +97,9 @@ MODEL_CFG = {
 # CHECKPOINT CONFIG ############################################################
 
 CHECKPOINT_CFG = {
-    'local_path': os.path.abspath('checkpoints/prefix.pt'),
-    'hf_repo': '',       # optional HF repo id; overrides local_path if set
-    'hf_filename': 'prefix.pt',}
+    'file_path': os.path.abspath('checkpoints/prefix.pt'),
+    'repo_path': '',
+    'device_str': MAIN_CFG['device_str'],}
 
 # EVAL CONFIG ##################################################################
 
@@ -117,6 +117,44 @@ def freeze_model(model: torch.nn.Module) -> None:
     """Disable gradients for all model parameters."""
     for __p in model.parameters():
         __p.requires_grad_(False)
+
+def save_checkpoint(
+    model_obj: torch.nn.Module,
+    path_str: str=OUTPUT_CFG['save_path'],
+) -> None:
+    torch.save(
+        {
+            'config': model._config,
+            'state_dict': model.state_dict()},
+        path_str)
+
+def load_checkpoint(
+    repo_path: str='',
+    file_path: str='prefix.pt',
+    device_str: str='cpu',
+) -> object:
+    """Load a model from a local checkpoint or HF hub path."""
+    __path = os.path.abspath(file_path)
+    __dir = os.path.dirname(__path)
+    __file = os.path.basename(__path)
+    # download from HF
+    if repo_path:
+        import huggingface_hub
+        huggingface_hub.hf_hub_download(
+            repo_id=repo_path,
+            filename=__file,
+            local_dir=__dir,
+            repo_type='model')
+    # check the disk
+    assert os.path.isfile(__path), f'model checkpoint not found: {__path}'
+    # parse the data
+    __ckpt = torch.load(__path, map_location=device_str, weights_only=True)
+    # instantiate the model
+    __prefix = deformers.layers.prefix.CompositeBytePrefix(**__ckpt['config'])
+    # load the weights
+    __prefix.load_state_dict(__ckpt['state_dict'])
+    # alternative transformer prefix
+    return __prefix.to(device=device_str)
 
 # MIXED PRECISION ##############################################################
 
@@ -166,12 +204,8 @@ print('[eval] freeing unused memory...')
 deformers.models.generic.free_memory()
 
 print('[eval] loading the prefix checkpoint...')
-PREFIX_MOD = deformers.pipelines.eval.load_prefix_checkpoint(
-    local_path=CHECKPOINT_CFG['local_path'],
-    hf_repo=CHECKPOINT_CFG['hf_repo'],
-    hf_filename=CHECKPOINT_CFG['hf_filename'],
-    device_str=MAIN_CFG['device_str'])
-PREFIX_MOD = PREFIX_MOD.to(device=MAIN_CFG['device_str'])
+PREFIX_MOD = load_prefix_checkpoint(**CHECKPOINT_CFG)
+PREFIX_MOD.eval()
 
 print('[eval] building the prefix...')
 PREFIX_MOD._build(
