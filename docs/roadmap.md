@@ -78,6 +78,13 @@ Objective: replace the token embedding layer while preserving model behavior.
 
 ## Monitoring [new]
 
+- [ ] add a progress bar during training, with:
+  - [ ] the epoch number compared to the total epochs
+  - [ ] the step number compared to the final step of the epoch
+  - [ ] the current learning rate
+  - [ ] the embed, hidden and total MSE losses
+  - [ ] the KL divergence at the target depth
+  - [ ] the hidden MSE loss on a fixed tensor with the top-k tokens (tweak k to match the batch shape)
 - [ ] add TensorBoard logging:
   - [ ] train/loss_total
   - [ ] train/loss_hidden
@@ -98,6 +105,8 @@ Primary objective:
 Core metrics:
 - [x] embedding reconstruction error (MSE)
 - [x] hidden-state similarity (MSE at depth `k`)
+- [ ] loss on the most prevalent tokens (top-k vocab)
+- [ ] delta predictions on a fixed sentence
 - [ ] KL divergence between teacher and student logits
 - [ ] top-1 match rate
 - [ ] top-k set match rate
