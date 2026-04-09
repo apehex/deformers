@@ -144,26 +144,14 @@ def save_checkpoint(
         path_str)
 
 def load_checkpoint(
-    repo_path: str='',
     file_path: str='prefix.pt',
     device_str: str='cpu',
 ) -> object:
     """Load a model from a local checkpoint or HF hub path."""
-    __path = os.path.abspath(file_path)
-    __dir = os.path.dirname(__path)
-    __file = os.path.basename(__path)
-    # download from HF
-    if repo_path:
-        import huggingface_hub
-        huggingface_hub.hf_hub_download(
-            repo_id=repo_path,
-            filename=__file,
-            local_dir=__dir,
-            repo_type='model')
     # check the disk
-    assert os.path.isfile(__path), f'model checkpoint not found: {__path}'
+    assert os.path.isfile(file_path), f'model checkpoint not found: {file_path}'
     # parse the data
-    __ckpt = torch.load(__path, map_location=device_str, weights_only=True)
+    __ckpt = torch.load(file_path, map_location=device_str, weights_only=True)
     # instantiate the model
     __prefix = deformers.layers.prefix.CompositeBytePrefix(**__ckpt['config'])
     # load the weights
