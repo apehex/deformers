@@ -16,9 +16,7 @@ Metrics computed:
 - embedding MSE
 - hidden-state MSE at the configured trunk depth
 - KL divergence (teacher logits vs student logits)
-- top-1 match rate
-- top-k set match rate
-- top-k exact-order match rate
+- top-k match rate (ordered)
 
 Optional probes:
 - fixed sentence probe: teacher vs student top-k tokens for the same contexts
@@ -33,6 +31,7 @@ import huggingface_hub
 import torch
 import torch.amp
 import torch.nn
+import torch.nn.functional
 import transformers
 
 import deformers.models.generic
@@ -51,7 +50,7 @@ MAIN_CFG = {
     'sequence_dim': 256,
     'patch_dim': 32,
     'depth_num': 4,
-    'eval_batches': 16,
+    'batch_num': 16,
     'topk_num': 10,}
 
 # DATA CONFIG ##################################################################
@@ -105,7 +104,7 @@ CHECKPOINT_CFG = {
 # EVAL CONFIG ##################################################################
 
 EVAL_CFG = {
-    'eval_batches': MAIN_CFG['eval_batches'],
+    'batch_num': MAIN_CFG['batch_num'],
     'topk_num': MAIN_CFG['topk_num'],
     'probe_sentences': [
         'The quick brown fox jumps over the lazy dog.',
@@ -185,9 +184,7 @@ __n_batches = 0
 __sum_embed_mse = 0.0
 __sum_hidden_mse = 0.0
 __sum_kl = 0.0
-__sum_top1 = 0.0
-__sum_topk_set = 0.0
-__sum_topk_order = 0.0
+__sum_topk = 0.0
 
 # EVALUATION LOOP ##############################################################
 
@@ -195,7 +192,7 @@ print('[eval] starting evaluation...')
 __dataset = DATASET_OBJ.iter(batch_size=BATCH_CFG['batch_dim'])
 
 for __batch in __dataset:
-    if __n_batches >= EVAL_CFG['eval_batches']:
+    if __n_batches >= EVAL_CFG['batch_num']:
         break
 
     __texts = __batch['text']
@@ -233,19 +230,14 @@ for __batch in __dataset:
                 SOURCE_MOD, __student_embeds, __mask_arr)
 
     # accumulate metrics
-    __sum_embed_mse += deformers.pipelines.eval.embed_mse(__teacher_embeds, __student_embeds)
-    __sum_hidden_mse += deformers.pipelines.eval.hidden_mse(__teacher_residuals, __student_residuals)
-    __sum_kl += deformers.pipelines.eval.kl_divergence(
-        __teacher_logits.float(), __student_logits.float())
-    __sum_top1 += deformers.pipelines.eval.top1_match_rate(__teacher_logits, __student_logits)
-    __sum_topk_set += deformers.pipelines.eval.topk_set_match_rate(
-        __teacher_logits, __student_logits, k=EVAL_CFG['topk_num'])
-    __sum_topk_order += deformers.pipelines.eval.topk_order_match_rate(
-        __teacher_logits, __student_logits, k=EVAL_CFG['topk_num'])
+    __sum_embed_mse += torch.nn.functional.mse_loss(__teacher_embeds.float(), __student_embeds.float()).item()
+    __sum_hidden_mse += torch.nn.functional.mse_loss(__teacher_residuals.float(), __student_residuals.float()).item()
+    __sum_kl += deformers.pipelines.eval.kl_divergence(__teacher_logits.float(), __student_logits.float()).item()
+    __sum_topk += deformers.pipelines.eval.topk_rate(__teacher_logits, __student_logits, k_num=EVAL_CFG['topk_num']).item()
 
     __n_batches += 1
     if __n_batches % 4 == 0:
-        print(f'[eval] batch {__n_batches}/{EVAL_CFG["eval_batches"]}')
+        print(f'[eval] batch {__n_batches}/{EVAL_CFG["batch_num"]}')
 
 # SUMMARY ######################################################################
 
@@ -255,9 +247,7 @@ if __n_batches > 0:
     print(f'[eval] embed MSE         : {__sum_embed_mse / __n_batches:.6f}')
     print(f'[eval] hidden MSE        : {__sum_hidden_mse / __n_batches:.6f}')
     print(f'[eval] KL divergence     : {__sum_kl / __n_batches:.6f}')
-    print(f'[eval] top-1 match rate  : {__sum_top1 / __n_batches:.4f}')
-    print(f'[eval] top-k set match   : {__sum_topk_set / __n_batches:.4f} (k={EVAL_CFG["topk_num"]})')
-    print(f'[eval] top-k order match : {__sum_topk_order / __n_batches:.4f} (k={EVAL_CFG["topk_num"]})')
+    print(f'[eval] top-k match       : {__sum_topk / __n_batches:.4f} (k={EVAL_CFG["topk_num"]})')
 
 # FIXED SENTENCE PROBE #########################################################
 
@@ -289,8 +279,8 @@ if EVAL_CFG['probe_sentences']:
         __t_toks = TEXT_TOK.convert_ids_to_tokens(__t_top)
         __s_toks = TEXT_TOK.convert_ids_to_tokens(__s_top)
         print(f'[eval] sentence {__i}: "{__sent[:60]}"')
-        print(f'[eval]   teacher top-{__k}: {__t_toks}')
-        print(f'[eval]   student top-{__k}: {__s_toks}')
+        print(f'[eval] teacher top-{__k}: {__t_toks}')
+        print(f'[eval] student top-{__k}: {__s_toks}')
 
 # VOCAB PROBE ##################################################################
 
@@ -324,7 +314,7 @@ if EVAL_CFG['vocab_probe']:
             __v_student_residuals, __v_student_logits = deformers.pipelines.eval.teacher_forward(
                 SOURCE_MOD, __v_student_embeds, __vocab_mask)
 
-    print(f'[eval] vocab embed MSE   : {deformers.pipelines.eval.embed_mse(__v_teacher_embeds, __v_student_embeds):.6f}')
-    print(f'[eval] vocab hidden MSE  : {deformers.pipelines.eval.hidden_mse(__v_teacher_residuals, __v_student_residuals):.6f}')
+    print(f'[eval] vocab embed MSE   : {torch.nn.functional.mse_loss(__v_teacher_embeds.float(), __v_student_embeds.float()).item():.6f}')
+    print(f'[eval] vocab hidden MSE  : {torch.nn.functional.mse_loss(__v_teacher_residuals.float(), __v_student_residuals.float()).item():.6f}')
     print(f'[eval] vocab KL          : {deformers.pipelines.eval.kl_divergence(__v_teacher_logits.float(), __v_student_logits.float()):.6f}')
-    print(f'[eval] vocab top-1 match : {deformers.pipelines.eval.top1_match_rate(__v_teacher_logits, __v_student_logits):.4f}')
+    print(f'[eval] vocab top-k       : {deformers.pipelines.eval.topk_rate(__v_teacher_logits, __v_student_logits):.4f}')

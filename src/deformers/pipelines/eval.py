@@ -10,6 +10,7 @@ Assumptions:
 - Checkpoint format: dict with keys 'config' and 'state_dict'.
 """
 
+import math
 import os
 
 import torch
@@ -20,117 +21,41 @@ import deformers.pipelines.patch
 
 # METRICS ######################################################################
 
-def embed_mse(
-    teacher_arr: torch.Tensor,
-    student_arr: torch.Tensor,
-) -> float:
-    """MSE between teacher and student embedding tensors (B, T, H)."""
-    return torch.nn.functional.mse_loss(
-        student_arr.float(),
-        teacher_arr.float()).item()
-
-
-def hidden_mse(
-    teacher_arr: torch.Tensor,
-    student_arr: torch.Tensor,
-) -> float:
-    """MSE between teacher and student hidden-state tensors (B, T, H)."""
-    return torch.nn.functional.mse_loss(
-        student_arr.float(),
-        teacher_arr.float()).item()
-
-
 def kl_divergence(
-    teacher_logits: torch.Tensor,
-    student_logits: torch.Tensor,
-    reduction: str='batchmean',
-) -> float:
-    """
-    KL divergence KL(teacher || student) over (B, T, V) logits.
-
-    Assumptions:
-    - Inputs are raw logits (not log-probs or probs).
-    - Reduction is applied over the full (B*T, V) batch.
-    - Teacher and student must have identical shapes.
-    """
-    assert teacher_logits.shape == student_logits.shape, (
-        f'shape mismatch: teacher={teacher_logits.shape} student={student_logits.shape}')
-    __B, __T, __V = teacher_logits.shape
-    __t = teacher_logits.float().reshape(__B * __T, __V)
-    __s = student_logits.float().reshape(__B * __T, __V)
+    teacher_arr: torch.Tensor,
+    student_arr: torch.Tensor,
+) -> torch.Tensor:
+    """KL divergence KL(teacher || student) over (B, T, V) raw logits."""
+    __shape = tuple(teacher_arr.shape)
+    __t = teacher_arr.float().reshape(math.prod(__shape[:-1]), __shape[-1])
+    __s = student_arr.float().reshape(math.prod(__shape[:-1]), __shape[-1])
     return torch.nn.functional.kl_div(
         torch.nn.functional.log_softmax(__s, dim=-1),
-        torch.nn.functional.softmax(__t, dim=-1),
-        reduction=reduction).item()
+        torch.nn.functional.log_softmax(__t, dim=-1),
+        reduction='batchmean',
+        log_target=True)
 
-
-def top1_match_rate(
-    teacher_logits: torch.Tensor,
-    student_logits: torch.Tensor,
-) -> float:
-    """
-    Fraction of (B, T) positions where teacher and student argmax tokens match.
-
-    Assumptions:
-    - Inputs are raw logits of shape (B, T, V).
-    """
-    __t = teacher_logits.argmax(dim=-1)
-    __s = student_logits.argmax(dim=-1)
-    return (__t == __s).float().mean().item()
-
-
-def topk_set_match_rate(
-    teacher_logits: torch.Tensor,
-    student_logits: torch.Tensor,
-    k: int=10,
-) -> float:
-    """
-    Fraction of (B, T) positions where teacher top-k and student top-k token sets are identical.
-
-    Assumptions:
-    - Inputs are raw logits of shape (B, T, V).
-    - Set match: both top-k sets must contain exactly the same token IDs (order ignored).
-    """
-    __t = teacher_logits.topk(k, dim=-1).indices.sort(dim=-1).values
-    __s = student_logits.topk(k, dim=-1).indices.sort(dim=-1).values
-    return (__t == __s).all(dim=-1).float().mean().item()
-
-
-def topk_order_match_rate(
-    teacher_logits: torch.Tensor,
-    student_logits: torch.Tensor,
-    k: int=10,
-) -> float:
-    """
-    Fraction of (B, T) positions where teacher top-k and student top-k token sequences match exactly (order-sensitive).
-
-    Assumptions:
-    - Inputs are raw logits of shape (B, T, V).
-    - Exact order match: the top-k ranked token IDs must be identical in the same order.
-    """
-    __t = teacher_logits.topk(k, dim=-1).indices
-    __s = student_logits.topk(k, dim=-1).indices
-    return (__t == __s).all(dim=-1).float().mean().item()
-
+def topk_rate(
+    teacher_arr: torch.Tensor,
+    student_arr: torch.Tensor,
+    k_num: int=10,
+) -> torch.Tensor:
+    """Fraction of (B, T) positions where teacher top-k and student top-k token sequences match exactly."""
+    __t = teacher_arr.topk(k_num, dim=-1).indices
+    __s = student_arr.topk(k_num, dim=-1).indices
+    return (__t == __s).all(dim=-1).float().mean()
 
 # PROBES #######################################################################
 
 def build_vocab_probe(
-    vocab_size: int,
+    vocab_dim: int,
     batch_dim: int,
     seq_dim: int,
 ) -> torch.Tensor:
-    """
-    Build a deterministic (B, T) token id tensor using consecutive vocab IDs.
-
-    Assumptions:
-    - Fills positions with IDs 0, 1, 2, ..., (B*T - 1) mod vocab_size.
-    - Deterministic: no randomness, same output for same arguments.
-    """
+    """Build a deterministic (B, T) token id tensor using consecutive vocab IDs."""
     __total = batch_dim * seq_dim
-    __ids = torch.arange(__total, dtype=torch.long) % vocab_size
+    __ids = torch.arange(__total, dtype=torch.long) % vocab_dim
     return __ids.reshape(batch_dim, seq_dim)
-
 
 def build_text_probe(
     texts_arr: list,
@@ -140,19 +65,7 @@ def build_text_probe(
     patch_dim: int=32,
     device_str: str='cpu',
 ) -> tuple:
-    """
-    Build a deterministic fixed probe batch from text samples.
-
-    Returns:
-        tokens_arr: (B, T) long tensor of token ids
-        mask_arr: (B, T) long tensor of attention masks
-        bytes_arr: (B, T, G) long tensor of byte patches
-
-    Assumptions:
-    - Tokenizer boundaries are identical to the base model tokenizer.
-    - Padding is right-padded to seq_dim.
-    - Byte patch dimension G is patch_dim.
-    """
+    """Build a deterministic fixed probe batch from text samples."""
     __inputs = text_tokenizer(
         texts_arr,
         return_offsets_mapping=True,
@@ -169,24 +82,13 @@ def build_text_probe(
     __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=device_str)
     return __tokens_arr, __mask_arr, __bytes_arr
 
-
 def build_vocab_probe_bytes(
     vocab_ids: torch.Tensor,
     text_tokenizer: object,
     byte_tokenizer: object,
     patch_dim: int=32,
 ) -> torch.Tensor:
-    """
-    Build byte patch tensor (B, T, G) from a (B, T) vocab probe token id tensor.
-
-    Each token id is decoded to its text string using text_tokenizer, then
-    re-encoded as a fixed-length byte block using byte_tokenizer.
-
-    Assumptions:
-    - text_tokenizer.decode([id]) returns the actual UTF-8 text for that token.
-    - Byte patch dimension G is patch_dim.
-    - Special token ids may produce empty or single-char strings.
-    """
+    """Build byte patch tensor (B, T, G) from a (B, T) vocab probe token id tensor."""
     __B, __T = vocab_ids.shape
     __flat = vocab_ids.flatten().tolist()
     # decode each token id to its actual text representation
@@ -200,7 +102,6 @@ def build_vocab_probe_bytes(
         tokenizer_obj=byte_tokenizer)
     return torch.tensor(__encoded, dtype=torch.long, device=vocab_ids.device)
 
-
 # TEACHER FORWARD ##############################################################
 
 def teacher_embed(
@@ -209,7 +110,6 @@ def teacher_embed(
 ) -> torch.Tensor:
     """Return the embedding layer output for the given token ids."""
     return model.model.embed_tokens(input_ids)
-
 
 def teacher_forward(
     model: object,

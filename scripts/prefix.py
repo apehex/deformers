@@ -254,7 +254,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
                 use_cache=False).last_hidden_state
 
             # hidden-state MSE at depth k
-            __loss_hidden = torch.nn.functional.mse_loss(__student_residuals, __teacher_residuals)
+            __loss_hidden = torch.nn.functional.mse_loss(__student_residuals.float(), __teacher_residuals.float())
             # optional embedding MSE warmup
             __loss_embed = torch.nn.functional.mse_loss(__student_embeds.float(), __teacher_embeds.float())
             # total loss
