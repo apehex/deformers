@@ -30,7 +30,7 @@ import transformers
 
 import deformers.layers.prefix
 import deformers.models.generic
-import deformers.pipelines.patching
+import deformers.pipelines.patch
 import deformers.tokenizers.byte
 
 # COMMON CONFIG ################################################################
@@ -226,7 +226,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             padding='max_length')
 
         # byte patches (B, T, G)
-        __encoded = deformers.pipelines.patching.tokenize_into_bytes(
+        __encoded = deformers.pipelines.patch.tokenize_into_bytes(
             texts_arr=__texts,
             offsets_arr=__inputs['offset_mapping'],
             patch_dim=BATCH_CFG['patch_dim'],

@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional
 
 import deformers.layers.prefix
-import deformers.pipelines.patching
+import deformers.pipelines.patch
 
 # METRICS ######################################################################
 
@@ -159,7 +159,7 @@ def build_text_probe(
         max_length=seq_dim,
         truncation='longest_first',
         padding='max_length')
-    __encoded = deformers.pipelines.patching.tokenize_into_bytes(
+    __encoded = deformers.pipelines.patch.tokenize_into_bytes(
         texts_arr=texts_arr,
         offsets_arr=__inputs['offset_mapping'],
         patch_dim=patch_dim,
@@ -194,7 +194,7 @@ def build_vocab_probe_bytes(
     # reshape into (B, T) list of lists
     __tokens_2d = [__strings[__i * __T:(__i + 1) * __T] for __i in range(__B)]
     # encode each token string as a fixed-length byte block
-    __encoded = deformers.pipelines.patching.encode_into_bytes(
+    __encoded = deformers.pipelines.patch.encode_into_bytes(
         tokens_arr=__tokens_2d,
         patch_dim=patch_dim,
         tokenizer_obj=byte_tokenizer)

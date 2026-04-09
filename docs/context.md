@@ -53,7 +53,3 @@ Current evaluation focus (Stage A prefix patch):
 - top-1 match rate, top-k set match rate, top-k exact-order match rate
 - fixed sentence probe: visual comparison of teacher vs student top-k tokens
 - vocab probe: deterministic (B, T) token tensor for repeatable comparison
-
-Shared evaluation utilities live in `src/deformers/eval.py` and are consumed by
-`scripts/benchmark.py`. Unit tests for metric helpers are in
-`tests/deformers/test_eval.py`.

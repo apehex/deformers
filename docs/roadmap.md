@@ -42,7 +42,7 @@ Objective: replace the token embedding layer while preserving model behavior.
   - [x] `L_max = 32 bytes`
 - [x] pad shorter tokens with null bytes (pad_id=128)
 - [x] truncate longer tokens
-- [x] preprocessing in `src/deformers/pipelines/patching.py`
+- [x] preprocessing in `src/deformers/pipelines/patch.py`
 
 ## Architecture [done]
 
@@ -124,7 +124,7 @@ Secondary checks:
    - [x] teacher vs student logits comparison (KL, top-1, top-k set, top-k order)
    - [x] fixed sentence probe: teacher vs student top-k tokens
    - [x] vocab probe: deterministic (B, T) token tensor evaluation
-   - [x] shared helpers in `src/deformers/eval.py`
+   - [x] shared helpers in `src/deformers/pipelines/eval.py`
 2. [ ] define stop criteria:
    - [ ] early stop on KL + top-k exact order plateau
 3. [ ] export and load pipeline:

@@ -35,9 +35,9 @@ import torch.amp
 import torch.nn
 import transformers
 
-import deformers.eval
 import deformers.models.generic
-import deformers.pipelines.patching
+import deformers.pipelines.eval
+import deformers.pipelines.patch
 import deformers.tokenizers.byte
 
 # COMMON CONFIG ################################################################
@@ -167,7 +167,7 @@ print('[eval] freeing unused memory...')
 deformers.models.generic.free_memory()
 
 print('[eval] loading the prefix checkpoint...')
-PREFIX_MOD = deformers.eval.load_prefix_checkpoint(
+PREFIX_MOD = deformers.pipelines.eval.load_prefix_checkpoint(
     local_path=CHECKPOINT_CFG['local_path'],
     hf_repo=CHECKPOINT_CFG['hf_repo'],
     hf_filename=CHECKPOINT_CFG['hf_filename'],
@@ -209,7 +209,7 @@ for __batch in __dataset:
         padding='max_length')
 
     # byte patches (B, T, G)
-    __encoded = deformers.pipelines.patching.tokenize_into_bytes(
+    __encoded = deformers.pipelines.patch.tokenize_into_bytes(
         texts_arr=__texts,
         offsets_arr=__inputs['offset_mapping'],
         patch_dim=BATCH_CFG['patch_dim'],
@@ -222,25 +222,25 @@ for __batch in __dataset:
 
     with torch.no_grad():
         # teacher forward: embeddings, residuals and logits (no grad)
-        __teacher_embeds = deformers.eval.teacher_embed(SOURCE_MOD, __tokens_arr)
-        __teacher_residuals, __teacher_logits = deformers.eval.teacher_forward(
+        __teacher_embeds = deformers.pipelines.eval.teacher_embed(SOURCE_MOD, __tokens_arr)
+        __teacher_residuals, __teacher_logits = deformers.pipelines.eval.teacher_forward(
             SOURCE_MOD, __teacher_embeds, __mask_arr)
 
         # student forward: prefix -> inputs_embeds -> trunk -> logits
         with MIXED_CTX:
             __student_embeds = PREFIX_MOD(__bytes_arr)
-            __student_residuals, __student_logits = deformers.eval.teacher_forward(
+            __student_residuals, __student_logits = deformers.pipelines.eval.teacher_forward(
                 SOURCE_MOD, __student_embeds, __mask_arr)
 
     # accumulate metrics
-    __sum_embed_mse += deformers.eval.embed_mse(__teacher_embeds, __student_embeds)
-    __sum_hidden_mse += deformers.eval.hidden_mse(__teacher_residuals, __student_residuals)
-    __sum_kl += deformers.eval.kl_divergence(
+    __sum_embed_mse += deformers.pipelines.eval.embed_mse(__teacher_embeds, __student_embeds)
+    __sum_hidden_mse += deformers.pipelines.eval.hidden_mse(__teacher_residuals, __student_residuals)
+    __sum_kl += deformers.pipelines.eval.kl_divergence(
         __teacher_logits.float(), __student_logits.float())
-    __sum_top1 += deformers.eval.top1_match_rate(__teacher_logits, __student_logits)
-    __sum_topk_set += deformers.eval.topk_set_match_rate(
+    __sum_top1 += deformers.pipelines.eval.top1_match_rate(__teacher_logits, __student_logits)
+    __sum_topk_set += deformers.pipelines.eval.topk_set_match_rate(
         __teacher_logits, __student_logits, k=EVAL_CFG['topk_num'])
-    __sum_topk_order += deformers.eval.topk_order_match_rate(
+    __sum_topk_order += deformers.pipelines.eval.topk_order_match_rate(
         __teacher_logits, __student_logits, k=EVAL_CFG['topk_num'])
 
     __n_batches += 1
@@ -263,7 +263,7 @@ if __n_batches > 0:
 
 if EVAL_CFG['probe_sentences']:
     print('\n[eval] === fixed sentence probe ===')
-    __probe_tokens, __probe_mask, __probe_bytes = deformers.eval.build_text_probe(
+    __probe_tokens, __probe_mask, __probe_bytes = deformers.pipelines.eval.build_text_probe(
         texts_arr=EVAL_CFG['probe_sentences'],
         text_tokenizer=TEXT_TOK,
         byte_tokenizer=BYTE_TOK,
@@ -272,12 +272,12 @@ if EVAL_CFG['probe_sentences']:
         device_str=MAIN_CFG['device_str'])
 
     with torch.no_grad():
-        __p_teacher_embeds = deformers.eval.teacher_embed(SOURCE_MOD, __probe_tokens)
-        __p_teacher_residuals, __p_teacher_logits = deformers.eval.teacher_forward(
+        __p_teacher_embeds = deformers.pipelines.eval.teacher_embed(SOURCE_MOD, __probe_tokens)
+        __p_teacher_residuals, __p_teacher_logits = deformers.pipelines.eval.teacher_forward(
             SOURCE_MOD, __p_teacher_embeds, __probe_mask)
         with MIXED_CTX:
             __p_student_embeds = PREFIX_MOD(__probe_bytes)
-            __p_student_residuals, __p_student_logits = deformers.eval.teacher_forward(
+            __p_student_residuals, __p_student_logits = deformers.pipelines.eval.teacher_forward(
                 SOURCE_MOD, __p_student_embeds, __probe_mask)
 
     __k = EVAL_CFG['topk_num']
@@ -301,13 +301,13 @@ if EVAL_CFG['vocab_probe']:
         SOURCE_MOD.config.text_config.vocab_size
         if hasattr(SOURCE_MOD.config, 'text_config')
         else SOURCE_MOD.config.vocab_size)
-    __vocab_ids = deformers.eval.build_vocab_probe(
+    __vocab_ids = deformers.pipelines.eval.build_vocab_probe(
         vocab_size=__vocab_size,
         batch_dim=BATCH_CFG['batch_dim'],
         seq_dim=BATCH_CFG['sequence_dim']).to(device=MAIN_CFG['device_str'])
 
     # build corresponding byte patches by decoding each token to its text
-    __vocab_bytes = deformers.eval.build_vocab_probe_bytes(
+    __vocab_bytes = deformers.pipelines.eval.build_vocab_probe_bytes(
         vocab_ids=__vocab_ids,
         text_tokenizer=TEXT_TOK,
         byte_tokenizer=BYTE_TOK,
@@ -316,15 +316,15 @@ if EVAL_CFG['vocab_probe']:
     __vocab_mask = torch.ones_like(__vocab_ids)
 
     with torch.no_grad():
-        __v_teacher_embeds = deformers.eval.teacher_embed(SOURCE_MOD, __vocab_ids)
-        __v_teacher_residuals, __v_teacher_logits = deformers.eval.teacher_forward(
+        __v_teacher_embeds = deformers.pipelines.eval.teacher_embed(SOURCE_MOD, __vocab_ids)
+        __v_teacher_residuals, __v_teacher_logits = deformers.pipelines.eval.teacher_forward(
             SOURCE_MOD, __v_teacher_embeds, __vocab_mask)
         with MIXED_CTX:
             __v_student_embeds = PREFIX_MOD(__vocab_bytes)
-            __v_student_residuals, __v_student_logits = deformers.eval.teacher_forward(
+            __v_student_residuals, __v_student_logits = deformers.pipelines.eval.teacher_forward(
                 SOURCE_MOD, __v_student_embeds, __vocab_mask)
 
-    print(f'[eval] vocab embed MSE   : {deformers.eval.embed_mse(__v_teacher_embeds, __v_student_embeds):.6f}')
-    print(f'[eval] vocab hidden MSE  : {deformers.eval.hidden_mse(__v_teacher_residuals, __v_student_residuals):.6f}')
-    print(f'[eval] vocab KL          : {deformers.eval.kl_divergence(__v_teacher_logits.float(), __v_student_logits.float()):.6f}')
-    print(f'[eval] vocab top-1 match : {deformers.eval.top1_match_rate(__v_teacher_logits, __v_student_logits):.4f}')
+    print(f'[eval] vocab embed MSE   : {deformers.pipelines.eval.embed_mse(__v_teacher_embeds, __v_student_embeds):.6f}')
+    print(f'[eval] vocab hidden MSE  : {deformers.pipelines.eval.hidden_mse(__v_teacher_residuals, __v_student_residuals):.6f}')
+    print(f'[eval] vocab KL          : {deformers.pipelines.eval.kl_divergence(__v_teacher_logits.float(), __v_student_logits.float()):.6f}')
+    print(f'[eval] vocab top-1 match : {deformers.pipelines.eval.top1_match_rate(__v_teacher_logits, __v_student_logits):.4f}')

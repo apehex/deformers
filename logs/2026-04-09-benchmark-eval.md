@@ -4,7 +4,7 @@ Date: 2026-04-09
 
 ## What was implemented
 
-### src/deformers/eval.py
+### src/deformers/pipelines/eval.py
 
 New shared evaluation utilities module. All functions are CPU/GPU agnostic,
 take plain tensors or module objects, and return Python scalars or tensors.
@@ -60,9 +60,9 @@ Key changes from the original prefix.py copy:
 - Optional vocab probe: runs a deterministic (B, T) token tensor through both
   teacher and student (via byte re-encoding) and reports embed/hidden MSE, KL,
   and top-1 match.
-- Uses deformers.eval helpers throughout; no duplicated metric logic.
+- Uses `deformers.pipelines.eval` helpers throughout; no duplicated metric logic.
 
-### tests/deformers/test_eval.py
+### tests/deformers/pipelines/test_eval.py
 
 34 CPU-only unit tests for eval.py metric helpers:
 - TestEmbedMse: 3 tests
