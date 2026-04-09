@@ -16,20 +16,39 @@ Training scheme (Stage A):
 - Student: CompositeBytePrefix forward then trunk forward with inputs_embeds.
 - Loss: hidden-state MSE at depth k (configurable), optional embedding MSE.
 - Only prefix parameters are updated; trunk is frozen.
+
+Monitoring (per optimizer step):
+- Progress bar (tqdm) with epoch, step, lr, embed MSE, hidden MSE, total loss, KL.
+- TensorBoard scalars: train/loss_total, train/loss_hidden, train/loss_embed,
+  train/lr, train/grad_norm, train/step_time_ms, gpu/memory_allocated_mb,
+  gpu/memory_reserved_mb.
+- KL divergence is computed for monitoring only (not added to the optimization loss).
+  It uses lm_head applied to the last micro-batch's hidden states (first item only
+  to limit memory overhead).
+- Accumulated losses (embed, hidden, total) are unscaled per-step means.
 """
 
 import contextlib
 import os
+import time
 
 import datasets
 import huggingface_hub
 import torch
 import torch.amp
 import torch.nn
+import tqdm
 import transformers
+
+try:
+    from torch.utils.tensorboard import SummaryWriter as _SummaryWriter
+except ImportError:
+    _SummaryWriter = None
 
 import deformers.layers.prefix
 import deformers.models.generic
+import deformers.monitoring
+import deformers.pipelines.eval
 import deformers.pipelines.patch
 import deformers.tokenizers.byte
 
@@ -121,7 +140,9 @@ LOSS_CFG = {
 # OUTPUT CONFIG ################################################################
 
 LOGGING_CFG = {
-    'step_num': 32,}
+    'step_num': 32,
+    'log_dir': os.path.abspath('runs/prefix'),
+    'tensorboard': True,}
 
 OUTPUT_CFG = {
     'save_path': os.path.abspath('checkpoints/prefix.pt'),}
@@ -167,7 +188,14 @@ def compute_loss(
     embeds_rate: float=LOSS_CFG['embeds_rate'],
     residuals_rate: float=LOSS_CFG['residuals_rate'],
     accumulation_num: int=GRADIENT_CFG['accumulation_num'],
-) -> torch.Tensor:
+) -> tuple:
+    """Compute the combined embedding and hidden-state MSE loss.
+
+    Returns:
+        (loss_scaled, embed_mse, hidden_mse) where loss_scaled is divided by
+        accumulation_num for gradient accumulation, and embed_mse / hidden_mse
+        are unscaled component values for monitoring.
+    """
     # MSE on the embeddings
     __loss_embeds = torch.nn.functional.mse_loss(
         student_embeds.float(),
@@ -178,8 +206,8 @@ def compute_loss(
         teacher_residuals.float())
     # combine the losses
     __loss = residuals_rate * __loss_residuals + embeds_rate * __loss_embeds
-    # scale to the accumulation batch size
-    return __loss / float(max(1, accumulation_num))
+    # scale to the accumulation batch size; return components for monitoring
+    return __loss / float(max(1, accumulation_num)), __loss_embeds.detach(), __loss_residuals.detach()
 
 # DATASET ######################################################################
 
@@ -200,6 +228,7 @@ BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(**BYTE_CFG)
 print('[init] creating the output directories...')
 os.makedirs(DOWNLOAD_CFG['local_dir'], exist_ok=True)
 os.makedirs(os.path.dirname(OUTPUT_CFG['save_path']), exist_ok=True)
+os.makedirs(LOGGING_CFG['log_dir'], exist_ok=True)
 
 print('[init] downloading the teacher...')
 huggingface_hub.snapshot_download(**DOWNLOAD_CFG)
@@ -243,11 +272,25 @@ MIXED_CTX = (
     if SCALER_CFG['enabled']
     else contextlib.nullcontext())
 
+# TENSORBOARD ##################################################################
+
+print('[init] creating TensorBoard writer...')
+if LOGGING_CFG['tensorboard'] and _SummaryWriter is not None:
+    TB_WRITER = _SummaryWriter(log_dir=LOGGING_CFG['log_dir'])
+    print(f"[init] TensorBoard logging to {LOGGING_CFG['log_dir']}")
+else:
+    TB_WRITER = None
+    if LOGGING_CFG['tensorboard']:
+        print('[init] TensorBoard not available (tensorboard package missing); logging disabled.')
+
 # ZERO #########################################################################
 
 print('[init] zeroing the state...')
 __step = 0
+__global_opt_step = 0
 __accum_loss = 0.0
+__accum_embed_mse = 0.0
+__accum_hidden_mse = 0.0
 
 OPTIMIZER_OBJ.zero_grad()
 
@@ -257,8 +300,28 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
     # create a new iterator since the previous one was exhausted
     __dataset = DATASET_OBJ.iter(batch_size=BATCH_CFG['batch_dim'])
 
-    # iterate on batches
-    for __batch in __dataset:
+    # estimate total micro-steps in epoch for the progress bar
+    __epoch_total = len(DATASET_OBJ) // BATCH_CFG['batch_dim']
+    __opt_steps_in_epoch = __epoch_total // GRADIENT_CFG['accumulation_num']
+
+    # progress bar for this epoch (advances every micro-step)
+    __pbar = tqdm.tqdm(
+        __dataset,
+        total=__epoch_total,
+        desc=f'epoch {__epoch + 1}/{TRAINING_CFG["epoch_num"]}',
+        unit='batch',
+        leave=True)
+
+    # per-epoch step counter (micro-steps)
+    __step_in_epoch = 0
+    # reset per-accumulation-window accumulators
+    __accum_loss = 0.0
+    __accum_embed_mse = 0.0
+    __accum_hidden_mse = 0.0
+    # start timing the first accumulation window
+    __step_start = time.monotonic()
+
+    for __batch in __pbar:
         __texts = __batch['text']
 
         # input_ids (B, T) and attention_mask (B, T)
@@ -297,8 +360,8 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
                 attention_mask=__mask_arr,
                 use_cache=False).last_hidden_state
 
-            # combination of the MSE at depth 0 and k
-            __loss = compute_loss(
+            # combination of the MSE at depth 0 and k; also returns unscaled components
+            __loss, __embed_mse_t, __hidden_mse_t = compute_loss(
                 teacher_embeds=__teacher_embeds,
                 student_embeds=__student_embeds,
                 teacher_residuals=__teacher_residuals,
@@ -308,22 +371,97 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
                 accumulation_num=GRADIENT_CFG['accumulation_num'])
 
         SCALER_OBJ.scale(__loss).backward()
+        # __accum_loss is sum of (loss / accumulation_num) = mean(loss) after N steps
         __accum_loss += __loss.item()
+        __accum_embed_mse += __embed_mse_t.item()
+        __accum_hidden_mse += __hidden_mse_t.item()
 
         # optimizer step after gradient accumulation
         if (__step + 1) % GRADIENT_CFG['accumulation_num'] == 0:
+            # compute KL from last micro-batch hidden states (monitoring only)
+            # uses first batch item only to avoid large logit tensors (B, T, V)
+            with torch.no_grad():
+                __t_logits = SOURCE_MOD.lm_head(__teacher_residuals[:1])
+                __s_logits = SOURCE_MOD.lm_head(__student_residuals[:1].detach())
+            __kl = deformers.pipelines.eval.kl_divergence(__t_logits, __s_logits).item()
+            del __t_logits, __s_logits
+
+            # gradient clipping; unscale first to get true grad norm
             SCALER_OBJ.unscale_(OPTIMIZER_OBJ)
-            torch.nn.utils.clip_grad_norm_(PREFIX_MOD.parameters(), max_norm=GRADIENT_CFG['max_norm'])
+            __grad_norm = torch.nn.utils.clip_grad_norm_(
+                PREFIX_MOD.parameters(),
+                max_norm=GRADIENT_CFG['max_norm']).item()
             SCALER_OBJ.step(OPTIMIZER_OBJ)
             SCALER_OBJ.update()
             OPTIMIZER_OBJ.zero_grad()
 
-            print(f"[train] step={((__step + 1) // GRADIENT_CFG['accumulation_num']):04d} loss={__accum_loss:.6f}")
+            # timing and throughput
+            __elapsed = time.monotonic() - __step_start
+            __step_time_ms = __elapsed * 1000.0
+            __tokens = BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'] * GRADIENT_CFG['accumulation_num']
+            __tps = deformers.monitoring.throughput(__tokens, __elapsed)
+
+            # per-optimizer-step means (embed/hidden accumulated then divided by N)
+            __mean_embed_mse = __accum_embed_mse / GRADIENT_CFG['accumulation_num']
+            __mean_hidden_mse = __accum_hidden_mse / GRADIENT_CFG['accumulation_num']
+            # __accum_loss is already mean(total_loss) over the window
+            __lr = deformers.monitoring.current_lr(OPTIMIZER_OBJ)
+            __mem = deformers.monitoring.gpu_memory_mb()
+            __opt_step_num = (__step + 1) // GRADIENT_CFG['accumulation_num']
+
+            # stdout: concise line for notebook-visible progress
+            print(
+                f'[train] epoch={__epoch + 1}/{TRAINING_CFG["epoch_num"]}'
+                f' step={__opt_step_num:04d}/{__opt_steps_in_epoch}'
+                f' loss={__accum_loss:.6f}'
+                f' embed={__mean_embed_mse:.6f}'
+                f' hidden={__mean_hidden_mse:.6f}'
+                f' kl={__kl:.6f}'
+                f' lr={__lr:.2e}'
+                f' gnorm={__grad_norm:.4f}'
+                f' ms={__step_time_ms:.0f}'
+                f' tok/s={__tps:.0f}')
+
+            # TensorBoard: all required tags plus KL and throughput
+            deformers.monitoring.log_scalars(TB_WRITER, {
+                'train/loss_total': __accum_loss,
+                'train/loss_embed': __mean_embed_mse,
+                'train/loss_hidden': __mean_hidden_mse,
+                'train/lr': __lr,
+                'train/grad_norm': __grad_norm,
+                'train/step_time_ms': __step_time_ms,
+                'train/kl': __kl,
+                'train/throughput_tok_per_sec': __tps,
+                'gpu/memory_allocated_mb': __mem['allocated_mb'],
+                'gpu/memory_reserved_mb': __mem['reserved_mb'],
+            }, __global_opt_step)
+
+            # update progress bar postfix with latest optimizer-step metrics
+            __pbar.set_postfix({
+                'opt': f'{__opt_step_num}/{__opt_steps_in_epoch}',
+                'loss': f'{__accum_loss:.4f}',
+                'embed': f'{__mean_embed_mse:.4f}',
+                'hidden': f'{__mean_hidden_mse:.4f}',
+                'kl': f'{__kl:.4f}',
+                'lr': f'{__lr:.1e}',})
+
+            # reset accumulators for next window
             __accum_loss = 0.0
+            __accum_embed_mse = 0.0
+            __accum_hidden_mse = 0.0
+            __global_opt_step += 1
+            __step_start = time.monotonic()
 
         # track the global step (across epochs)
         __step += 1
+        __step_in_epoch += 1
+
+    __pbar.close()
+
+# close TensorBoard writer
+if TB_WRITER is not None:
+    TB_WRITER.close()
 
 # save prefix weights
 save_checkpoint(model_obj=PREFIX_MOD, path_str=OUTPUT_CFG['save_path'])
-print(f"[train] saved prefix to {OUTPUT_CFG['save_path']}")
+print(f'[train] saved prefix to {OUTPUT_CFG["save_path"]}')

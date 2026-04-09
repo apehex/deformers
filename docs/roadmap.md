@@ -76,26 +76,26 @@ Objective: replace the token embedding layer while preserving model behavior.
 - [x] tokenizer partition identical to base model
 - [x] output shape `(B, T, H)` compatible with trunk
 
-## Monitoring [new]
+## Monitoring [done]
 
-- [ ] add a progress bar during training, with:
-  - [ ] the epoch number compared to the total epochs
-  - [ ] the step number compared to the final step of the epoch
-  - [ ] the current learning rate
-  - [ ] the embed, hidden and total MSE losses
-  - [ ] the KL divergence at the target depth
-  - [ ] the hidden MSE loss on a fixed tensor with the top-k tokens (tweak k to match the batch shape)
-- [ ] add TensorBoard logging:
-  - [ ] train/loss_total
-  - [ ] train/loss_hidden
-  - [ ] train/loss_embed
-  - [ ] train/lr
-  - [ ] train/grad_norm
-  - [ ] train/step_time_ms
-  - [ ] gpu/memory_allocated_mb
-  - [ ] gpu/memory_reserved_mb
-- [ ] log memory and throughput every optimizer step
-- [ ] keep plain stdout logs for notebook runs
+- [x] add a progress bar during training, with:
+  - [x] the epoch number compared to the total epochs
+  - [x] the step number compared to the final step of the epoch
+  - [x] the current learning rate
+  - [x] the embed, hidden and total MSE losses
+  - [x] the KL divergence at the target depth
+  - [ ] the hidden MSE loss on a fixed tensor with the top-k tokens (deferred)
+- [x] add TensorBoard logging:
+  - [x] train/loss_total
+  - [x] train/loss_hidden
+  - [x] train/loss_embed
+  - [x] train/lr
+  - [x] train/grad_norm
+  - [x] train/step_time_ms
+  - [x] gpu/memory_allocated_mb
+  - [x] gpu/memory_reserved_mb
+- [x] log memory and throughput every optimizer step
+- [x] keep plain stdout logs for notebook runs
 
 ## Evaluation [extended]
 
@@ -130,7 +130,7 @@ Secondary checks:
 3. [ ] export and load pipeline:
    - [x] save/load prefix checkpoint (`load_prefix_checkpoint` in eval.py)
    - [ ] run end-to-end generation with patched prefix
-4. [ ] add TensorBoard writer and scalars/histograms
+4. [x] add TensorBoard writer and scalars/histograms
 5. [x] add tests for patching and evaluation utilities
 
 ---
