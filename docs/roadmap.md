@@ -119,7 +119,7 @@ Secondary checks:
 ## Near-term tasks
 
 1. [ ] build Stage A evaluation script:
-   - [ ] `scripts/eval_prefix.py`
+   - [ ] `scripts/benchmark.py`
    - [ ] fixed validation subset
    - [ ] teacher vs student logits comparison
 2. [ ] define stop criteria:
