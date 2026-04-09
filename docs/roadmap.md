@@ -105,12 +105,12 @@ Primary objective:
 Core metrics:
 - [x] embedding reconstruction error (MSE)
 - [x] hidden-state similarity (MSE at depth `k`)
+- [x] KL divergence between teacher and student logits
+- [x] top-1 match rate
+- [x] top-k set match rate
+- [x] top-k exact order match rate (strict)
 - [ ] loss on the most prevalent tokens (top-k vocab)
 - [ ] delta predictions on a fixed sentence
-- [ ] KL divergence between teacher and student logits
-- [ ] top-1 match rate
-- [ ] top-k set match rate
-- [ ] top-k exact order match rate (strict)
 
 Secondary checks:
 - [ ] qualitative comparison via text generation
@@ -118,17 +118,20 @@ Secondary checks:
 
 ## Near-term tasks
 
-1. [ ] build Stage A evaluation script:
-   - [ ] `scripts/benchmark.py`
-   - [ ] fixed validation subset
-   - [ ] teacher vs student logits comparison
+1. [x] build Stage A evaluation script:
+   - [x] `scripts/benchmark.py` - true evaluation entrypoint (no training)
+   - [x] fixed validation subset (`train[90%:]`)
+   - [x] teacher vs student logits comparison (KL, top-1, top-k set, top-k order)
+   - [x] fixed sentence probe: teacher vs student top-k tokens
+   - [x] vocab probe: deterministic (B, T) token tensor evaluation
+   - [x] shared helpers in `src/deformers/eval.py`
 2. [ ] define stop criteria:
    - [ ] early stop on KL + top-k exact order plateau
 3. [ ] export and load pipeline:
-   - [ ] save/load prefix checkpoint
+   - [x] save/load prefix checkpoint (`load_prefix_checkpoint` in eval.py)
    - [ ] run end-to-end generation with patched prefix
 4. [ ] add TensorBoard writer and scalars/histograms
-5. [ ] add tests for patching and evaluation utilities
+5. [x] add tests for patching and evaluation utilities
 
 ---
 

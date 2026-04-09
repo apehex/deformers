@@ -42,4 +42,18 @@ Experiment with model level composition and test the modularity.
 1. split pretrained model into prefix / trunk / suffix
 2. replace prefix or suffix with experimental module
 3. train patch using teacher outputs from the original model
-4. evaluate performance relative to baseline model
+4. evaluate performance relative to baseline model using `scripts/benchmark.py`
+
+## Evaluation priorities
+
+Current evaluation focus (Stage A prefix patch):
+- embedding MSE between teacher token embeddings and prefix output
+- hidden-state MSE at configured trunk depth `k`
+- KL divergence between teacher and student logits
+- top-1 match rate, top-k set match rate, top-k exact-order match rate
+- fixed sentence probe: visual comparison of teacher vs student top-k tokens
+- vocab probe: deterministic (B, T) token tensor for repeatable comparison
+
+Shared evaluation utilities live in `src/deformers/eval.py` and are consumed by
+`scripts/benchmark.py`. Unit tests for metric helpers are in
+`tests/deformers/test_eval.py`.

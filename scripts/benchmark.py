@@ -1,21 +1,28 @@
 """
-Replace
+Evaluation script for prefix patch experiments.
 
-Trains the CompositeBytePrefix module to distill from qwen/qwen3.5-9b by
-injecting prefix outputs via inputs_embeds into the frozen trunk.
+Loads a teacher model and an alternative prefix from a checkpoint, then
+computes and prints summary metrics over a fixed evaluation split.
 
 Assumptions:
 - Base model is qwen/qwen3.5-9b with hidden_size=4096.
 - Tokenizer boundaries are identical to the base model.
-- Trunk is frozen during training; only the prefix parameters are trained.
+- Trunk is frozen; prefix checkpoint is required (local path or HF repo).
 - Byte block size default follows docs/roadmap.md (L_max=32), configurable.
 - The byte tokenizer uses pad_id=128 (as implemented by ByteTokenizer).
+- Memory-safe defaults: small batch, mixed precision on CUDA.
 
-Training scheme (Stage A):
-- Teacher: qwen/qwen3.5-9b forward with original input_ids (no grad).
-- Student: CompositeBytePrefix forward then trunk forward with inputs_embeds.
-- Loss: hidden-state MSE at depth k (configurable), optional embedding MSE.
-- Only prefix parameters are updated; trunk is frozen.
+Metrics computed:
+- embedding MSE
+- hidden-state MSE at the configured trunk depth
+- KL divergence (teacher logits vs student logits)
+- top-1 match rate
+- top-k set match rate
+- top-k exact-order match rate
+
+Optional probes:
+- fixed sentence probe: teacher vs student top-k tokens for the same contexts
+- vocab probe: metrics on a deterministic (B, T) token tensor
 """
 
 import contextlib
@@ -28,7 +35,7 @@ import torch.amp
 import torch.nn
 import transformers
 
-import deformers.layers.prefix
+import deformers.eval
 import deformers.models.generic
 import deformers.pipelines.patching
 import deformers.tokenizers.byte
@@ -40,19 +47,19 @@ MAIN_CFG = {
     'device_str': 'cuda' if torch.cuda.is_available() else 'cpu',
     'encoding_str': 'utf-8',
     'seed_num': 1337,
-    'batch_dim': 8,
+    'batch_dim': 4,
     'sequence_dim': 256,
     'patch_dim': 32,
     'depth_num': 4,
-    'epoch_num': 4,
-    'accumulation_num': 16,}
+    'eval_batches': 16,
+    'topk_num': 10,}
 
 # DATA CONFIG ##################################################################
 
 DATASET_CFG = {
     'path': 'wikimedia/wikipedia',
     'name': '20231101.en',
-    'split': 'train[:10%]',
+    'split': 'train[90%:]',  # small bounded eval split
     'streaming': False,}
 
 BATCH_CFG = {
@@ -81,11 +88,6 @@ CONFIG_CFG = {
     'pretrained_model_name_or_path': DOWNLOAD_CFG['local_dir'],
     'trust_remote_code': False,}
 
-# MODEL_CFG = {
-#     'pretrained_model_name_or_path': MAIN_CFG['model_str'],
-#     'device_map': MAIN_CFG['device_str'],
-#     'dtype': torch.bfloat16,}
-
 MODEL_CFG = {
     'pretrained_model_name_or_path': DOWNLOAD_CFG['local_dir'],
     'trust_remote_code': CONFIG_CFG['trust_remote_code'],
@@ -93,38 +95,22 @@ MODEL_CFG = {
     'low_cpu_mem_usage': True,
     'ignore_mismatched_sizes': True,}
 
-PREFIX_CFG = {
-    'embed_dim': 4096 // BATCH_CFG['patch_dim'],
-    'vocab_dim': 256,
-    'latent_dim': 4096,
-    'group_dim': -1,}
+# CHECKPOINT CONFIG ############################################################
 
-# TRAINING CONFIG ##############################################################
+CHECKPOINT_CFG = {
+    'local_path': os.path.abspath('checkpoints/prefix.pt'),
+    'hf_repo': '',       # optional HF repo id; overrides local_path if set
+    'hf_filename': 'prefix.pt',}
 
-TRAINING_CFG = {
-    'epoch_num': MAIN_CFG['epoch_num'],}
+# EVAL CONFIG ##################################################################
 
-OPTIMIZER_CFG = {
-    'lr': 3e-4,}
-
-SCALER_CFG = {
-    'enabled': MAIN_CFG['device_str'] == 'cuda',}
-
-GRADIENT_CFG = {
-    'accumulation_num': MAIN_CFG['accumulation_num'],
-    'max_norm': 1.0,}
-
-LOSS_CFG = {
-    'hidden_rate': 1.0,
-    'embed_rate': 0.1,}
-
-# OUTPUT CONFIG ################################################################
-
-LOGGING_CFG = {
-    'step_num': 32,}
-
-OUTPUT_CFG = {
-    'save_path': os.path.abspath('checkpoints/prefix.pt'),}
+EVAL_CFG = {
+    'eval_batches': MAIN_CFG['eval_batches'],
+    'topk_num': MAIN_CFG['topk_num'],
+    'probe_sentences': [
+        'The quick brown fox jumps over the lazy dog.',
+        'In the beginning was the Word, and the Word was with God.',],
+    'vocab_probe': True,}
 
 # UTILS ########################################################################
 
@@ -133,151 +119,212 @@ def freeze_model(model: torch.nn.Module) -> None:
     for __p in model.parameters():
         __p.requires_grad_(False)
 
-def embed_tokens(model: torch.nn.Module, input_ids: torch.Tensor) -> torch.Tensor:
-    """Return the embedding layer output for the given token ids."""
-    return model.model.embed_tokens(input_ids)
+# MIXED PRECISION ##############################################################
+
+MIXED_CTX = (
+    torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
+    if MAIN_CFG['device_str'] == 'cuda'
+    else contextlib.nullcontext())
 
 # DATASET ######################################################################
 
-print('[init] downloading the dataset...')
+print('[eval] downloading the dataset...')
 DATASET_OBJ = datasets.load_dataset(**DATASET_CFG)
 
-print('[init] preprocessing the dataset...')
+print('[eval] preprocessing the dataset...')
 DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed_num'])
 
 # TOKENIZERS ###################################################################
 
-print('[init] loading the tokenizers...')
+print('[eval] loading the tokenizers...')
 TEXT_TOK = transformers.AutoTokenizer.from_pretrained(**TOKEN_CFG)
 BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(**BYTE_CFG)
 
 # MODELS #######################################################################
 
-print('[init] creating the output directories...')
+print('[eval] creating the output directories...')
 os.makedirs(DOWNLOAD_CFG['local_dir'], exist_ok=True)
-os.makedirs(os.path.dirname(OUTPUT_CFG['save_path']), exist_ok=True)
 
-print('[init] downloading the teacher...')
+print('[eval] downloading the teacher...')
 huggingface_hub.snapshot_download(**DOWNLOAD_CFG)
 
-print('[init] loading the config...')
+print('[eval] loading the config...')
 TRUNK_CFG = transformers.AutoConfig.from_pretrained(**CONFIG_CFG)
 
-print('[init] truncating the config...')
-TRUNK_CFG = deformers.models.generic.truncate_config(TRUNK_CFG, layer_num=MAIN_CFG['depth_num'], target_key='text_config')
+print('[eval] truncating the config...')
+TRUNK_CFG = deformers.models.generic.truncate_config(
+    TRUNK_CFG, layer_num=MAIN_CFG['depth_num'], target_key='text_config')
 
-print('[init] loading the teacher...') # load only the used layers, up to the chose depth
-SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(config=TRUNK_CFG, **MODEL_CFG).to(device=MAIN_CFG['device_str'])
+print('[eval] loading the teacher...')  # load only the used layers up to the chosen depth
+SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(
+    config=TRUNK_CFG, **MODEL_CFG).to(device=MAIN_CFG['device_str'])
 
-print('[init] freezing the teacher...')
+print('[eval] freezing the teacher...')
 SOURCE_MOD.eval()
 freeze_model(SOURCE_MOD)
 
-print('[init] creating the student...')
-PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
-
-# print('[init] truncating the teacher...')
-# SOURCE_MOD = deformers.models.generic.truncate_model(SOURCE_MOD, layer_num=MAIN_CFG['depth_num'])
-
-print('[init] freeing the unused layers...')
+print('[eval] freeing unused memory...')
 deformers.models.generic.free_memory()
 
-print('[init] building the student...')
+print('[eval] loading the prefix checkpoint...')
+PREFIX_MOD = deformers.eval.load_prefix_checkpoint(
+    local_path=CHECKPOINT_CFG['local_path'],
+    hf_repo=CHECKPOINT_CFG['hf_repo'],
+    hf_filename=CHECKPOINT_CFG['hf_filename'],
+    device_str=MAIN_CFG['device_str'])
+PREFIX_MOD = PREFIX_MOD.to(device=MAIN_CFG['device_str'])
+
+print('[eval] building the prefix...')
 PREFIX_MOD._build(
     shape_arr=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
     device_str=MAIN_CFG['device_str'])
 
-# OPTIMIZER ####################################################################
+# ACCUMULATORS #################################################################
 
-print('[init] creating optimizer...')
-OPTIMIZER_OBJ = torch.optim.AdamW(PREFIX_MOD.parameters(), **OPTIMIZER_CFG)
-SCALER_OBJ = torch.amp.GradScaler(**SCALER_CFG)
+__n_batches = 0
+__sum_embed_mse = 0.0
+__sum_hidden_mse = 0.0
+__sum_kl = 0.0
+__sum_top1 = 0.0
+__sum_topk_set = 0.0
+__sum_topk_order = 0.0
 
-print('[init] enabling mixed precision...')
-MIXED_CTX = (
-    torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
-    if SCALER_CFG['enabled']
-    else contextlib.nullcontext())
+# EVALUATION LOOP ##############################################################
 
-# ZERO #########################################################################
+print('[eval] starting evaluation...')
+__dataset = DATASET_OBJ.iter(batch_size=BATCH_CFG['batch_dim'])
 
-print('[init] zeroing the state...')
-__step = 0
-__accum_loss = 0.0
+for __batch in __dataset:
+    if __n_batches >= EVAL_CFG['eval_batches']:
+        break
 
-OPTIMIZER_OBJ.zero_grad()
+    __texts = __batch['text']
 
-# TRAINING #####################################################################
+    # input_ids (B, T) and attention_mask (B, T)
+    __inputs = TEXT_TOK(
+        __texts,
+        return_offsets_mapping=True,
+        max_length=BATCH_CFG['sequence_dim'],
+        truncation='longest_first',
+        padding='max_length')
 
-for __epoch in range(TRAINING_CFG['epoch_num']):
-    # create a new iterator since the previous one was exhausted
-    __dataset = DATASET_OBJ.iter(batch_size=BATCH_CFG['batch_dim'])
+    # byte patches (B, T, G)
+    __encoded = deformers.pipelines.patching.tokenize_into_bytes(
+        texts_arr=__texts,
+        offsets_arr=__inputs['offset_mapping'],
+        patch_dim=BATCH_CFG['patch_dim'],
+        tokenizer_obj=BYTE_TOK)
 
-    # iterate on batches
-    for __batch in __dataset:
-        __texts = __batch['text']
+    # format as tensors
+    __tokens_arr = torch.tensor(__inputs['input_ids'], dtype=torch.long, device=MAIN_CFG['device_str'])
+    __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.long, device=MAIN_CFG['device_str'])
+    __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=MAIN_CFG['device_str'])
 
-        # input_ids (B, T) and attention_mask (B, T)
-        __inputs = TEXT_TOK(
-            __texts,
-            return_offsets_mapping=True,
-            max_length=BATCH_CFG['sequence_dim'],
-            truncation='longest_first',
-            padding='max_length')
+    with torch.no_grad():
+        # teacher forward: embeddings, residuals and logits (no grad)
+        __teacher_embeds = deformers.eval.teacher_embed(SOURCE_MOD, __tokens_arr)
+        __teacher_residuals, __teacher_logits = deformers.eval.teacher_forward(
+            SOURCE_MOD, __teacher_embeds, __mask_arr)
 
-        # byte patches (B, T, G)
-        __encoded = deformers.pipelines.patching.tokenize_into_bytes(
-            texts_arr=__texts,
-            offsets_arr=__inputs['offset_mapping'],
-            patch_dim=BATCH_CFG['patch_dim'],
-            tokenizer_obj=BYTE_TOK)
-
-        # format as tensors
-        __tokens_arr = torch.tensor(__inputs['input_ids'], dtype=torch.long, device=MAIN_CFG['device_str'])
-        __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.long, device=MAIN_CFG['device_str'])
-        __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=MAIN_CFG['device_str'])
-
-        # teacher forward: get original embeddings and hidden states (no grad)
-        with torch.no_grad():
-            __teacher_embeds = embed_tokens(SOURCE_MOD, __tokens_arr)
-            __teacher_residuals = SOURCE_MOD.model(
-                inputs_embeds=__teacher_embeds,
-                attention_mask=__mask_arr,
-                use_cache=False).last_hidden_state
-
-        # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
+        # student forward: prefix -> inputs_embeds -> trunk -> logits
         with MIXED_CTX:
             __student_embeds = PREFIX_MOD(__bytes_arr)
-            __student_residuals = SOURCE_MOD.model(
-                inputs_embeds=__student_embeds,
-                attention_mask=__mask_arr,
-                use_cache=False).last_hidden_state
+            __student_residuals, __student_logits = deformers.eval.teacher_forward(
+                SOURCE_MOD, __student_embeds, __mask_arr)
 
-            # hidden-state MSE at depth k
-            __loss_hidden = torch.nn.functional.mse_loss(__student_residuals, __teacher_residuals)
-            # optional embedding MSE warmup
-            __loss_embed = torch.nn.functional.mse_loss(__student_embeds.float(), __teacher_embeds.float())
-            # total loss
-            __loss = LOSS_CFG['hidden_rate'] * __loss_hidden + LOSS_CFG['embed_rate'] * __loss_embed
-            __loss = __loss / GRADIENT_CFG['accumulation_num']
+    # accumulate metrics
+    __sum_embed_mse += deformers.eval.embed_mse(__teacher_embeds, __student_embeds)
+    __sum_hidden_mse += deformers.eval.hidden_mse(__teacher_residuals, __student_residuals)
+    __sum_kl += deformers.eval.kl_divergence(
+        __teacher_logits.float(), __student_logits.float())
+    __sum_top1 += deformers.eval.top1_match_rate(__teacher_logits, __student_logits)
+    __sum_topk_set += deformers.eval.topk_set_match_rate(
+        __teacher_logits, __student_logits, k=EVAL_CFG['topk_num'])
+    __sum_topk_order += deformers.eval.topk_order_match_rate(
+        __teacher_logits, __student_logits, k=EVAL_CFG['topk_num'])
 
-        SCALER_OBJ.scale(__loss).backward()
-        __accum_loss += __loss.item()
+    __n_batches += 1
+    if __n_batches % 4 == 0:
+        print(f'[eval] batch {__n_batches}/{EVAL_CFG["eval_batches"]}')
 
-        # optimizer step after gradient accumulation
-        if (__step + 1) % GRADIENT_CFG['accumulation_num'] == 0:
-            SCALER_OBJ.unscale_(OPTIMIZER_OBJ)
-            torch.nn.utils.clip_grad_norm_(PREFIX_MOD.parameters(), max_norm=GRADIENT_CFG['max_norm'])
-            SCALER_OBJ.step(OPTIMIZER_OBJ)
-            SCALER_OBJ.update()
-            OPTIMIZER_OBJ.zero_grad()
+# SUMMARY ######################################################################
 
-            print(f"[train] step={((__step + 1) // GRADIENT_CFG['accumulation_num']):04d} loss={__accum_loss:.6f}")
-            __accum_loss = 0.0
+if __n_batches > 0:
+    print('\n[eval] === summary metrics ===')
+    print(f'[eval] batches evaluated : {__n_batches}')
+    print(f'[eval] embed MSE         : {__sum_embed_mse / __n_batches:.6f}')
+    print(f'[eval] hidden MSE        : {__sum_hidden_mse / __n_batches:.6f}')
+    print(f'[eval] KL divergence     : {__sum_kl / __n_batches:.6f}')
+    print(f'[eval] top-1 match rate  : {__sum_top1 / __n_batches:.4f}')
+    print(f'[eval] top-k set match   : {__sum_topk_set / __n_batches:.4f} (k={EVAL_CFG["topk_num"]})')
+    print(f'[eval] top-k order match : {__sum_topk_order / __n_batches:.4f} (k={EVAL_CFG["topk_num"]})')
 
-        # track the global step (across epochs)
-        __step += 1
+# FIXED SENTENCE PROBE #########################################################
 
-# save prefix weights
-torch.save({'config': PREFIX_MOD._config, 'state_dict': PREFIX_MOD.state_dict()}, OUTPUT_CFG['save_path'])
-print(f"[train] saved prefix to {OUTPUT_CFG['save_path']}")
+if EVAL_CFG['probe_sentences']:
+    print('\n[eval] === fixed sentence probe ===')
+    __probe_tokens, __probe_mask, __probe_bytes = deformers.eval.build_text_probe(
+        texts_arr=EVAL_CFG['probe_sentences'],
+        text_tokenizer=TEXT_TOK,
+        byte_tokenizer=BYTE_TOK,
+        seq_dim=BATCH_CFG['sequence_dim'],
+        patch_dim=BATCH_CFG['patch_dim'],
+        device_str=MAIN_CFG['device_str'])
+
+    with torch.no_grad():
+        __p_teacher_embeds = deformers.eval.teacher_embed(SOURCE_MOD, __probe_tokens)
+        __p_teacher_residuals, __p_teacher_logits = deformers.eval.teacher_forward(
+            SOURCE_MOD, __p_teacher_embeds, __probe_mask)
+        with MIXED_CTX:
+            __p_student_embeds = PREFIX_MOD(__probe_bytes)
+            __p_student_residuals, __p_student_logits = deformers.eval.teacher_forward(
+                SOURCE_MOD, __p_student_embeds, __probe_mask)
+
+    __k = EVAL_CFG['topk_num']
+    for __i, __sent in enumerate(EVAL_CFG['probe_sentences']):
+        # report at the last real token position
+        __pos = int(__probe_mask[__i].sum().item()) - 1
+        __t_top = __p_teacher_logits[__i, __pos].topk(__k).indices.tolist()
+        __s_top = __p_student_logits[__i, __pos].topk(__k).indices.tolist()
+        __t_toks = TEXT_TOK.convert_ids_to_tokens(__t_top)
+        __s_toks = TEXT_TOK.convert_ids_to_tokens(__s_top)
+        print(f'[eval] sentence {__i}: "{__sent[:60]}"')
+        print(f'[eval]   teacher top-{__k}: {__t_toks}')
+        print(f'[eval]   student top-{__k}: {__s_toks}')
+
+# VOCAB PROBE ##################################################################
+
+if EVAL_CFG['vocab_probe']:
+    print('\n[eval] === vocab probe ===')
+    # resolve vocab size from text_config if available (multimodal models)
+    __vocab_size = (
+        SOURCE_MOD.config.text_config.vocab_size
+        if hasattr(SOURCE_MOD.config, 'text_config')
+        else SOURCE_MOD.config.vocab_size)
+    __vocab_ids = deformers.eval.build_vocab_probe(
+        vocab_size=__vocab_size,
+        batch_dim=BATCH_CFG['batch_dim'],
+        seq_dim=BATCH_CFG['sequence_dim']).to(device=MAIN_CFG['device_str'])
+
+    # build corresponding byte patches by decoding each token to its text
+    __vocab_bytes = deformers.eval.build_vocab_probe_bytes(
+        vocab_ids=__vocab_ids,
+        text_tokenizer=TEXT_TOK,
+        byte_tokenizer=BYTE_TOK,
+        patch_dim=BATCH_CFG['patch_dim'])
+
+    __vocab_mask = torch.ones_like(__vocab_ids)
+
+    with torch.no_grad():
+        __v_teacher_embeds = deformers.eval.teacher_embed(SOURCE_MOD, __vocab_ids)
+        __v_teacher_residuals, __v_teacher_logits = deformers.eval.teacher_forward(
+            SOURCE_MOD, __v_teacher_embeds, __vocab_mask)
+        with MIXED_CTX:
+            __v_student_embeds = PREFIX_MOD(__vocab_bytes)
+            __v_student_residuals, __v_student_logits = deformers.eval.teacher_forward(
+                SOURCE_MOD, __v_student_embeds, __vocab_mask)
+
+    print(f'[eval] vocab embed MSE   : {deformers.eval.embed_mse(__v_teacher_embeds, __v_student_embeds):.6f}')
+    print(f'[eval] vocab hidden MSE  : {deformers.eval.hidden_mse(__v_teacher_residuals, __v_student_residuals):.6f}')
+    print(f'[eval] vocab KL          : {deformers.eval.kl_divergence(__v_teacher_logits.float(), __v_student_logits.float()):.6f}')
+    print(f'[eval] vocab top-1 match : {deformers.eval.top1_match_rate(__v_teacher_logits, __v_student_logits):.4f}')
