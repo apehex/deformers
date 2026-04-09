@@ -34,6 +34,7 @@ import torch.nn
 import torch.nn.functional
 import transformers
 
+import deformers.layers.prefix
 import deformers.models.generic
 import deformers.pipelines.eval
 import deformers.pipelines.patch
@@ -120,12 +121,12 @@ def freeze_model(model: torch.nn.Module) -> None:
 
 def save_checkpoint(
     model_obj: torch.nn.Module,
-    path_str: str=OUTPUT_CFG['save_path'],
+    path_str: str=CHECKPOINT_CFG['file_path'],
 ) -> None:
     torch.save(
         {
-            'config': model._config,
-            'state_dict': model.state_dict()},
+            'config': model_obj._config,
+            'state_dict': model_obj.state_dict()},
         path_str)
 
 def load_checkpoint(
@@ -204,7 +205,7 @@ print('[eval] freeing unused memory...')
 deformers.models.generic.free_memory()
 
 print('[eval] loading the prefix checkpoint...')
-PREFIX_MOD = load_prefix_checkpoint(**CHECKPOINT_CFG)
+PREFIX_MOD = load_checkpoint(**CHECKPOINT_CFG)
 PREFIX_MOD.eval()
 
 print('[eval] building the prefix...')
@@ -335,7 +336,7 @@ if EVAL_CFG['vocab_probe']:
         vocab_ids=__vocab_ids,
         text_tokenizer=TEXT_TOK,
         byte_tokenizer=BYTE_TOK,
-        patch_dim=BATCH_CFG['patch_dim'])
+        patch_dim=BATCH_CFG['patch_dim']).to(device=MAIN_CFG['device_str'])
 
     __vocab_mask = torch.ones_like(__vocab_ids)
 

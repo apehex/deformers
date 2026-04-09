@@ -128,9 +128,9 @@ OUTPUT_CFG = {
 
 # UTILS ########################################################################
 
-def freeze_model(model: torch.nn.Module) -> None:
+def freeze_model(model_obj: torch.nn.Module) -> None:
     """Disable gradients for all model parameters."""
-    for __p in model.parameters():
+    for __p in model_obj.parameters():
         __p.requires_grad_(False)
 
 def save_checkpoint(
@@ -139,8 +139,8 @@ def save_checkpoint(
 ) -> None:
     torch.save(
         {
-            'config': model._config,
-            'state_dict': model.state_dict()},
+            'config': model_obj._config,
+            'state_dict': model_obj.state_dict()},
         path_str)
 
 def load_checkpoint(
@@ -169,7 +169,7 @@ def load_checkpoint(
     # load the weights
     __prefix.load_state_dict(__ckpt['state_dict'])
     # alternative transformer prefix
-    return __prefix
+    return __prefix.to(device=device_str)
 
 # DATASET ######################################################################
 
@@ -281,7 +281,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
 
         # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
         with MIXED_CTX:
-            __student_embeds = PREFIX_MOD(__bytes_arr)
+            __student_embeds = PREFIX_MOD(__bytes_arr).to(dtype=__teacher_embeds.dtype)
             __student_residuals = SOURCE_MOD.model(
                 inputs_embeds=__student_embeds,
                 attention_mask=__mask_arr,
