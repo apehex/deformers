@@ -115,8 +115,8 @@ GRADIENT_CFG = {
     'max_norm': 1.0,}
 
 LOSS_CFG = {
-    'hidden_rate': 1.0,
-    'embed_rate': 0.1,}
+    'embeds_rate': 0.1,
+    'residuals_rate': 1.0,}
 
 # OUTPUT CONFIG ################################################################
 
@@ -158,6 +158,28 @@ def load_checkpoint(
     __prefix.load_state_dict(__ckpt['state_dict'])
     # alternative transformer prefix
     return __prefix.to(device=device_str)
+
+def compute_loss(
+    student_embeds: torch.Tensor,
+    teacher_embeds: torch.Tensor,
+    student_residuals: torch.Tensor,
+    teacher_residuals: torch.Tensor,
+    embeds_rate: float=LOSS_CFG['embeds_rate'],
+    residuals_rate: float=LOSS_CFG['residuals_rate'],
+    accumulation_num: int=GRADIENT_CFG['accumulation_num'],
+) -> torch.Tensor:
+    # MSE on the embeddings
+    __loss_embeds = torch.nn.functional.mse_loss(
+        student_embeds.float(),
+        teacher_embeds.float())
+    # MSE on the hidden states at depth k
+    __loss_residuals = torch.nn.functional.mse_loss(
+        student_residuals.float(),
+        teacher_residuals.float())
+    # combine the losses
+    __loss = residuals_rate * __loss_residuals + embeds_rate * __loss_embeds
+    # scale to the accumulation batch size
+    return __loss / float(max(1, accumulation_num))
 
 # DATASET ######################################################################
 
@@ -275,13 +297,15 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
                 attention_mask=__mask_arr,
                 use_cache=False).last_hidden_state
 
-            # hidden-state MSE at depth k
-            __loss_hidden = torch.nn.functional.mse_loss(__student_residuals.float(), __teacher_residuals.float())
-            # optional embedding MSE warmup
-            __loss_embed = torch.nn.functional.mse_loss(__student_embeds.float(), __teacher_embeds.float())
-            # total loss
-            __loss = LOSS_CFG['hidden_rate'] * __loss_hidden + LOSS_CFG['embed_rate'] * __loss_embed
-            __loss = __loss / GRADIENT_CFG['accumulation_num']
+            # combination of the MSE at depth 0 and k
+            __loss = compute_loss(
+                teacher_embeds=__teacher_embeds,
+                student_embeds=__student_embeds,
+                teacher_residuals=__teacher_residuals,
+                student_residuals=__student_residuals,
+                embeds_rate=LOSS_CFG['embeds_rate'],
+                residuals_rate=LOSS_CFG['residuals_rate'],
+                accumulation_num=GRADIENT_CFG['accumulation_num'])
 
         SCALER_OBJ.scale(__loss).backward()
         __accum_loss += __loss.item()
