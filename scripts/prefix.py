@@ -40,18 +40,19 @@ MAIN_CFG = {
     'device_str': 'cuda' if torch.cuda.is_available() else 'cpu',
     'encoding_str': 'utf-8',
     'seed_num': 1337,
-    'batch_dim': 32,
+    'batch_dim': 8,
     'sequence_dim': 256,
     'patch_dim': 32,
     'depth_num': 4,
-    'epoch_num': 256,}
+    'epoch_num': 4,
+    'accumulation_num': 16,}
 
 # DATA CONFIG ##################################################################
 
 DATASET_CFG = {
     'path': 'wikimedia/wikipedia',
     'name': '20231101.en',
-    'split': 'train',
+    'split': 'train[:10%]',
     'streaming': False,}
 
 BATCH_CFG = {
@@ -110,7 +111,7 @@ SCALER_CFG = {
     'enabled': MAIN_CFG['device_str'] == 'cuda',}
 
 GRADIENT_CFG = {
-    'accumulation_num': 4,
+    'accumulation_num': MAIN_CFG['accumulation_num'],
     'max_norm': 1.0,}
 
 LOSS_CFG = {
