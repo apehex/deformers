@@ -6,28 +6,28 @@ It combines short-term tasks, mid-term experiments, and longer-term directions.
 
 ---
 
-# Phase 0 - Foundations
+# Phase 0 - Foundations [done]
 
 Objective: establish a stable experimental framework.
 
-## Documentation
+## Documentation [done]
 
-- finalize documentation structure
-- define invariants and constraints
-- document model architecture and patch interfaces
+- [x] finalize documentation structure
+- [x] define invariants and constraints
+- [x] document model architecture and patch interfaces
 
-## Infrastructure
+## Infrastructure [done]
 
-- implement model splitting:
-  - prefix / trunk / suffix separation
-- implement shared trunk execution between models
-- implement dataset preprocessing pipeline
+- [x] implement model splitting:
+  - [x] prefix / trunk / suffix separation
+- [x] implement shared trunk execution between models
+- [x] implement dataset preprocessing pipeline
 
-## Testing
+## Testing [done]
 
-- define unit tests for prefix patch
-- validate tensor shapes and interfaces
-- validate compatibility with base model tokenizer
+- [x] define unit tests for prefix patch
+- [x] validate tensor shapes and interfaces
+- [x] validate compatibility with base model tokenizer
 
 ---
 
@@ -37,43 +37,89 @@ Objective: replace the token embedding layer while preserving model behavior.
 
 ## Representation [done]
 
-- encode tokens using UTF-8 byte sequences
-- fix maximum token length:
-  - `L_max = 32 bytes`
-- pad shorter tokens with null bytes (pad_id=128)
-- truncate longer tokens
-- preprocessing in `src/deformers/patching/bytes.py`
+- [x] encode tokens using UTF-8 byte sequences
+- [x] fix maximum token length:
+  - [x] `L_max = 32 bytes`
+- [x] pad shorter tokens with null bytes (pad_id=128)
+- [x] truncate longer tokens
+- [x] preprocessing in `src/deformers/pipelines/patching.py`
 
-## Architecture [done - Stage A]
+## Architecture [done]
 
-- Stage A (implemented):
-  - `CompositeBytePrefix` in `src/deformers/layers/prefix.py`
-  - `CompositeEmbedding(256, embed_dim, group_dim=G, merge_axes=True)` -> `(B, T, G*embed_dim)`
-  - `LayerNorm -> Linear -> SiLU -> Linear -> LayerNorm` projection to `hidden_size`
-  - lazy-build, no explicit device args, submodules registered as `self._layers`
-- Stage B (planned): add a copied Qwen decoder block inside the prefix
-- Stage C (planned): small byte-level transformer over G positions
+- [x] Stage A:
+  - [x] `CompositeBytePrefix` in `src/deformers/layers/prefix.py`
+  - [x] `CompositeEmbedding(256, embed_dim, group_dim=G, merge_axes=True)` -> `(B, T, G*E)`
+  - [x] `LayerNorm -> Linear -> SiLU -> Linear -> LayerNorm` projection to `hidden_size`
+  - [x] lazy-build, no explicit device args, submodules registered as `self._layers`
+- [ ] Stage B (planned): add a copied Qwen decoder block inside the prefix
+- [ ] Stage C (planned): small byte-level transformer over G positions
 
-## Training [done - Stage A]
+## Training [~]
 
-- training script: `scripts/train_prefix_stage_a.py`
-- embedding regression warmup: MSE between prefix output and original embeddings
-- hidden-state matching at depth `k` (distillation via `inputs_embeds`)
-- trunk and lm_head are frozen; only prefix parameters are trained
-- optional KL divergence on logits (planned)
+- [x] training script: `scripts/train_prefix_stage_a.py`
+- [x] embedding regression warmup: MSE between prefix output and original embeddings
+- [x] hidden-state matching at depth `k` (distillation via `inputs_embeds`)
+- [x] trunk and lm_head are frozen; only prefix parameters are trained
+- [ ] optional KL divergence on logits (planned)
+- [ ] learning rate warmup and decay
+- [ ] apply the attention mask to both hidden and embed losses
+- [ ] track the KL divergence loss too
+- [ ] use `accelerate`
+- [ ] two-stage curriculum:
+  - [ ] train only embedding MSE (set hidden_rate=0, embed_rate=1) until low plateau
+  - [ ] enable hidden loss (e.g. hidden_rate=1, embed_rate=0.05)
+  - [ ] could be extended by increasing the teacher's depth epoch after epoch
 
 ## Integration [done]
 
-- shared transformer trunk via `inputs_embeds` HF interface
-- tokenizer partition identical to base model
-- output shape `(B, T, hidden_size)` compatible with trunk
+- [x] shared transformer trunk via `inputs_embeds` HF interface
+- [x] tokenizer partition identical to base model
+- [x] output shape `(B, T, H)` compatible with trunk
 
-## Evaluation
+## Monitoring [new]
 
-- embedding reconstruction error
-- hidden-state similarity
-- KL divergence between logits
-- qualitative comparison via text generation
+- [ ] add TensorBoard logging:
+  - [ ] train/loss_total
+  - [ ] train/loss_hidden
+  - [ ] train/loss_embed
+  - [ ] train/lr
+  - [ ] train/grad_norm
+  - [ ] train/step_time_ms
+  - [ ] gpu/memory_allocated_mb
+  - [ ] gpu/memory_reserved_mb
+- [ ] log memory and throughput every optimizer step
+- [ ] keep plain stdout logs for notebook runs
+
+## Evaluation [extended]
+
+Primary objective:
+- [ ] match teacher token ranking as closely as possible
+
+Core metrics:
+- [x] embedding reconstruction error (MSE)
+- [x] hidden-state similarity (MSE at depth `k`)
+- [ ] KL divergence between teacher and student logits
+- [ ] top-1 match rate
+- [ ] top-k set match rate
+- [ ] top-k exact order match rate (strict)
+
+Secondary checks:
+- [ ] qualitative comparison via text generation
+- [ ] latency overhead of prefix patching
+
+## Near-term tasks
+
+1. [ ] build Stage A evaluation script:
+   - [ ] `scripts/eval_prefix.py`
+   - [ ] fixed validation subset
+   - [ ] teacher vs student logits comparison
+2. [ ] define stop criteria:
+   - [ ] early stop on KL + top-k exact order plateau
+3. [ ] export and load pipeline:
+   - [ ] save/load prefix checkpoint
+   - [ ] run end-to-end generation with patched prefix
+4. [ ] add TensorBoard writer and scalars/histograms
+5. [ ] add tests for patching and evaluation utilities
 
 ---
 
