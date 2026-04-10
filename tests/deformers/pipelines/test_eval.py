@@ -45,9 +45,11 @@ class TestKlDivergence:
         __s[:, :, 1] = 10.0  # student strongly prefers token 1
         assert deformers.pipelines.eval.kl_divergence(__t, __s).item() > 0.0
 
-    def test_returns_float(self):
+    def test_returns_scalar(self):
         __x = torch.randn(_B, _T, _V)
-        assert isinstance(deformers.pipelines.eval.kl_divergence(__x, __x), torch.Tensor)
+        __y = deformers.pipelines.eval.kl_divergence(__x, __x)
+        assert isinstance(__y, torch.Tensor)
+        assert len(__y.shape) == 0
 
     def test_finite_output(self):
         __t = torch.randn(_B, _T, _V)
@@ -80,9 +82,11 @@ class TestTop1MatchRate:
         __s[:, 2:, 1] = 1.0         # student picks 1 for last 2
         assert deformers.pipelines.eval.topk_rate(__t, __s, 1) == pytest.approx(0.5)
 
-    def test_returns_float(self):
+    def test_returns_scalar(self):
         __x = torch.randn(_B, _T, _V)
-        assert isinstance(deformers.pipelines.eval.topk_rate(__x, __x, 1), float)
+        __y = deformers.pipelines.eval.topk_rate(__x, __x, 1)
+        assert isinstance(__y, torch.Tensor)
+        assert len(__y.shape) == 0
 
     def test_value_in_unit_interval(self):
         __t = torch.randn(_B, _T, _V)
@@ -115,9 +119,11 @@ class TestTopkOrderMatchRate:
         if _K > 1:
             assert deformers.pipelines.eval.topk_rate(__t, __s, k_num=_K) == pytest.approx(0.0)
 
-    def test_returns_float(self):
+    def test_returns_scalar(self):
         __x = torch.randn(_B, _T, _V)
-        assert isinstance(deformers.pipelines.eval.topk_rate(__x, __x, k_num=_K), float)
+        __y = deformers.pipelines.eval.topk_rate(__x, __x, k_num=_K)
+        assert isinstance(__y, torch.Tensor)
+        assert len(__y.shape) == 0
 
     def test_value_in_unit_interval(self):
         __t = torch.randn(_B, _T, _V)

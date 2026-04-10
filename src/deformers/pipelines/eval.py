@@ -46,4 +46,4 @@ def topk_rate(
     __t = teacher_arr.topk(k_num, dim=-1).indices
     __s = student_arr.topk(k_num, dim=-1).indices
     # reduced to a Python float
-    return float((__t == __s).all(dim=-1).float().mean())
+    return (__t == __s).all(dim=-1).float().mean()
