@@ -43,21 +43,3 @@ Experiment with model level composition and test the modularity.
 2. replace prefix or suffix with experimental module
 3. train patch using teacher outputs from the original model
 4. evaluate performance relative to baseline model using `scripts/benchmark.py`
-
-## Observability
-
-Training monitoring is implemented in `scripts/prefix.py`:
-- tqdm progress bar shows epoch, optimizer step, loss components, KL, and LR.
-- TensorBoard writer logs train/loss_total, train/loss_hidden, train/loss_embed,
-  train/lr, train/grad_norm, train/step_time_ms, and gpu/memory_* at each optimizer step.
-- KL divergence is computed from lm_head on the last micro-batch's hidden states
-  (first item in the batch only) and is monitored but not added to the training loss.
-- Stdout lines remain readable in Colab notebook runs.
-- Generic monitoring helpers (gpu_memory_mb, current_lr, throughput, log_scalars)
-  live in src/deformers/monitoring.py.
-- embedding MSE between teacher token embeddings and prefix output
-- hidden-state MSE at configured trunk depth `k`
-- KL divergence between teacher and student logits
-- top-1 match rate, top-k set match rate, top-k exact-order match rate
-- fixed sentence probe: visual comparison of teacher vs student top-k tokens
-- vocab probe: deterministic (B, T) token tensor for repeatable comparison
