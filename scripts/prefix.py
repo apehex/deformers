@@ -37,13 +37,10 @@ import huggingface_hub
 import torch
 import torch.amp
 import torch.nn
+import torch.utils.tensorboard
 import tqdm
 import transformers
 
-try:
-    from torch.utils.tensorboard import SummaryWriter as _SummaryWriter
-except ImportError:
-    _SummaryWriter = None
 
 import deformers.layers.prefix
 import deformers.models.generic
@@ -108,7 +105,7 @@ CONFIG_CFG = {
 MODEL_CFG = {
     'pretrained_model_name_or_path': DOWNLOAD_CFG['local_dir'],
     'trust_remote_code': CONFIG_CFG['trust_remote_code'],
-    'torch_dtype': torch.bfloat16,
+    'dtype': torch.bfloat16,
     'low_cpu_mem_usage': True,
     'ignore_mismatched_sizes': True,}
 
@@ -141,8 +138,7 @@ LOSS_CFG = {
 
 LOGGING_CFG = {
     'step_num': 32,
-    'log_dir': os.path.abspath('runs/prefix'),
-    'tensorboard': True,}
+    'log_dir': os.path.abspath('logs'),}
 
 OUTPUT_CFG = {
     'save_path': os.path.abspath('checkpoints/prefix.pt'),}
@@ -189,13 +185,7 @@ def compute_loss(
     residuals_rate: float=LOSS_CFG['residuals_rate'],
     accumulation_num: int=GRADIENT_CFG['accumulation_num'],
 ) -> tuple:
-    """Compute the combined embedding and hidden-state MSE loss.
-
-    Returns:
-        (loss_scaled, embed_mse, hidden_mse) where loss_scaled is divided by
-        accumulation_num for gradient accumulation, and embed_mse / hidden_mse
-        are unscaled component values for monitoring.
-    """
+    """Compute the combined embedding and hidden-state MSE loss."""
     # MSE on the embeddings
     __loss_embeds = torch.nn.functional.mse_loss(
         student_embeds.float(),
@@ -227,8 +217,8 @@ BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(**BYTE_CFG)
 
 print('[init] creating the output directories...')
 os.makedirs(DOWNLOAD_CFG['local_dir'], exist_ok=True)
-os.makedirs(os.path.dirname(OUTPUT_CFG['save_path']), exist_ok=True)
 os.makedirs(LOGGING_CFG['log_dir'], exist_ok=True)
+os.makedirs(os.path.dirname(OUTPUT_CFG['save_path']), exist_ok=True)
 
 print('[init] downloading the teacher...')
 huggingface_hub.snapshot_download(**DOWNLOAD_CFG)
@@ -274,14 +264,8 @@ MIXED_CTX = (
 
 # TENSORBOARD ##################################################################
 
-print('[init] creating TensorBoard writer...')
-if LOGGING_CFG['tensorboard'] and _SummaryWriter is not None:
-    TB_WRITER = _SummaryWriter(log_dir=LOGGING_CFG['log_dir'])
-    print(f"[init] TensorBoard logging to {LOGGING_CFG['log_dir']}")
-else:
-    TB_WRITER = None
-    if LOGGING_CFG['tensorboard']:
-        print('[init] TensorBoard not available (tensorboard package missing); logging disabled.')
+print('[init] logging to {}...'.format(LOGGING_CFG['log_dir']))
+TB_WRITER = torch.utils.tensorboard.SummaryWriter(log_dir=LOGGING_CFG['log_dir'])
 
 # ZERO #########################################################################
 
@@ -423,18 +407,20 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
                 f' tok/s={__tps:.0f}')
 
             # TensorBoard: all required tags plus KL and throughput
-            deformers.monitoring.log_scalars(TB_WRITER, {
-                'train/loss_total': __accum_loss,
-                'train/loss_embed': __mean_embed_mse,
-                'train/loss_hidden': __mean_hidden_mse,
-                'train/lr': __lr,
-                'train/grad_norm': __grad_norm,
-                'train/step_time_ms': __step_time_ms,
-                'train/kl': __kl,
-                'train/throughput_tok_per_sec': __tps,
-                'gpu/memory_allocated_mb': __mem['allocated_mb'],
-                'gpu/memory_reserved_mb': __mem['reserved_mb'],
-            }, __global_opt_step)
+            deformers.monitoring.log_scalars(
+                writer=TB_WRITER,
+                step=__global_opt_step,
+                scalars={
+                    'train/loss_total': __accum_loss,
+                    'train/loss_embed': __mean_embed_mse,
+                    'train/loss_hidden': __mean_hidden_mse,
+                    'train/lr': __lr,
+                    'train/grad_norm': __grad_norm,
+                    'train/step_time_ms': __step_time_ms,
+                    'train/kl': __kl,
+                    'train/throughput_tok_per_sec': __tps,
+                    'gpu/memory_allocated_mb': __mem['allocated_mb'],
+                    'gpu/memory_reserved_mb': __mem['reserved_mb'],})
 
             # update progress bar postfix with latest optimizer-step metrics
             __pbar.set_postfix({
@@ -459,8 +445,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
     __pbar.close()
 
 # close TensorBoard writer
-if TB_WRITER is not None:
-    TB_WRITER.close()
+TB_WRITER.close()
 
 # save prefix weights
 save_checkpoint(model_obj=PREFIX_MOD, path_str=OUTPUT_CFG['save_path'])
