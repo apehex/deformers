@@ -11,26 +11,22 @@ Available helpers:
 - log_scalars: log a dict of scalars to a SummaryWriter; no-op if writer is None.
 """
 
-from typing import Dict, Optional
-
 import torch
 import torch.optim
 
 # GPU ##########################################################################
 
 def gpu_memory_mb(
-    device: Optional[torch.device]=None,
-) -> Dict[str, float]:
-    """Return current GPU memory stats in MB.
-
-    Returns a dict with keys 'allocated_mb' and 'reserved_mb'.
-    Returns zeros on CPU-only environments.
-    """
-    if not torch.cuda.is_available():
-        return {'allocated_mb': 0.0, 'reserved_mb': 0.0}
-    return {
-        'allocated_mb': torch.cuda.memory_allocated(device) / 1e6,
-        'reserved_mb': torch.cuda.memory_reserved(device) / 1e6,}
+    device: str='',
+) -> dict[str, float]:
+    """Return current GPU memory stats in MB."""
+    __stats = {'allocated_mb': 0.0, 'reserved_mb': 0.0}
+    # in mega bytes
+    if torch.cuda.is_available() and device:
+        __stats['allocated_mb'] = torch.cuda.memory_allocated(device) / float(2 ** 20)
+        __stats['reserved_mb']= torch.cuda.memory_reserved(device) / float(2 ** 20)
+    # defaults to 0
+    return __stats
 
 # OPTIMIZER ####################################################################
 
@@ -44,39 +40,20 @@ def current_lr(
 
 def throughput(
     count: int,
-    elapsed_sec: float,
+    elapsed: float,
+    epsilon: float=1e-6,
 ) -> float:
-    """Compute items per second from a count and an elapsed wall time.
-
-    Args:
-        count: number of tokens or examples processed.
-        elapsed_sec: elapsed wall time in seconds.
-
-    Returns:
-        Rate in count-per-second. Returns 0.0 if elapsed_sec <= 0.
-    """
-    if elapsed_sec <= 0.0:
-        return 0.0
-    return float(count) / elapsed_sec
+    """Compute items per second from a count and an elapsed wall time."""
+    return (float(count) / elapsed) if  (elapsed > 0.0) else 0.0
 
 # TENSORBOARD ##################################################################
 
 def log_scalars(
     writer,
-    scalars: Dict[str, float],
+    scalars: dict[str, float],
     step: int,
 ) -> None:
-    """Log a dict of (tag -> float) scalars to a SummaryWriter.
-
-    No-op if writer is None, which allows callers to disable TensorBoard
-    by passing None without conditional logic at the call site.
-
-    Args:
-        writer: torch.utils.tensorboard.SummaryWriter instance, or None.
-        scalars: dict mapping tag strings to float values.
-        step: global step index for TensorBoard.
-    """
-    if writer is None:
-        return
-    for __tag, __val in scalars.items():
-        writer.add_scalar(__tag, float(__val), step)
+    """Log a dict of (tag -> float) scalars to a SummaryWriter."""
+    if hasattr(writer, 'add_scalar'):
+        for __tag, __val in scalars.items():
+            writer.add_scalar(__tag, float(__val), step)

@@ -100,7 +100,6 @@ class _FakeWriter:
     def add_scalar(self, tag, value, step):
         self.calls.append((tag, value, step))
 
-
 class TestLogScalars:
 
     def test_noop_when_writer_is_none(self):
