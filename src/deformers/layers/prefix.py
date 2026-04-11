@@ -71,7 +71,7 @@ class CompositeBytePrefix(torch.nn.Module):
                     group_dim=self._config['group_dim'],
                     merge_axes=True),
                 # (B, T, G*E) => (B, T, G*E)
-                torch.nn.LayerNorm(
+                torch.nn.GroupNorm(
                     num_groups=__group_dim,
                     num_channels=__embed_dim,
                     affine=True),
