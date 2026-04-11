@@ -138,7 +138,7 @@ LOGGING_CFG = {
 OUTPUT_CFG = {
     'save_path': os.path.abspath('checkpoints/prefix.pt'),}
 
-# UTILS ########################################################################
+# MODEL UTILS ##################################################################
 
 def freeze_model(model_obj: torch.nn.Module) -> None:
     """Disable gradients for all model parameters."""
@@ -171,6 +171,8 @@ def load_checkpoint(
     # alternative transformer prefix
     return __prefix.to(device=device_str)
 
+# LOSS UTILS ###################################################################
+
 def compute_loss(
     student_embeds: torch.Tensor,
     teacher_embeds: torch.Tensor,
@@ -195,6 +197,45 @@ def compute_loss(
     __factor = float(max(1, accumulation_num))
     # return the components for monitoring
     return (__loss_embeds.detach() / __factor, __loss_residuals.detach() / __factor, __loss / __factor)
+
+# LOGGING UTILS ################################################################
+
+def init_state() -> dict:
+    return {
+        'train/iter/start': time.monotonic(),
+        'train/iter/time': 0.0,
+        'train/iter/tps': 0.0,
+        'train/gradient/rate': 0.0,
+        'train/gradient/norm': 0.0,
+        'train/loss/total': 0.0,
+        'train/loss/embed': 0.0,
+        'train/loss/hidden': 0.0,
+        'train/loss/kldiv': 0.0,
+        'gpu/memory/allocated': 0.0,
+        'gpu/memory/reserved': 0.0,}
+
+def reset_state(stats: dict, ignore: list=[]) -> dict:
+    """Reset all the tracked state variables."""
+    return {
+        __k: __v if (__k in ignore) else (time.monotonic() if (__k == 'train/iter/start') else 0.0)
+        for (__k, __v) in stats.items()}
+
+def output_state(
+    stats: dict,
+    epoch_num: int,
+    epoch_tot: int,
+    step_num: int,
+    step_tot: int,
+    stage_str: str='train',
+    stage_opt: bool=True,
+) -> str:
+    """Serialize the state variables to monitor the progress."""
+    return (
+        f"[{stage_str}] epoch({epoch_num}/{epoch_tot})" * stage_opt
+        f" step({step_num:04d}/{step_tot})"
+        f" loss(total={stats['train/loss/total']:.6f} embed={stats['train/loss/embed']:.6f} hidden={stats['train/loss/hidden']:.6f} kl={stats['train/loss/kldiv']:.6f})"
+        f" gradient(rate={stats['train/gradient/rate']:.2e} norm={stats['train/gradient/norm']:.4f})"
+        f" iter(time={stats['train/iter/time'] * 1000.0:.0f} tok/s={stats['train/iter/tps']:.0f})")
 
 # DATASET ######################################################################
 
@@ -270,18 +311,7 @@ BATCH_LEN = BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'] * GRADIENT_CFG['a
 
 print('[init] zeroing the state...')
 __step = 0
-__state = {
-    'train/iter/start': 0.0,
-    'train/iter/time': 0.0,
-    'train/iter/tps': 0.0,
-    'train/gradient/rate': 0.0,
-    'train/gradient/norm': 0.0,
-    'train/loss/total': 0.0,
-    'train/loss/embed': 0.0,
-    'train/loss/hidden': 0.0,
-    'train/loss/kldiv': 0.0,
-    'gpu/memory/allocated': 0.0,
-    'gpu/memory/reserved': 0.0,}
+__state = init_state()
 
 OPTIMIZER_OBJ.zero_grad()
 
@@ -299,12 +329,8 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         unit='batch',
         leave=True)
 
-    # reset per-accumulation-window accumulators
-    __state['train/loss/total'] = 0.0
-    __state['train/loss/embed'] = 0.0
-    __state['train/loss/hidden'] = 0.0
-    # start timing the first accumulation window
-    __state['train/iter/start'] = time.monotonic()
+    # reset the accumulators and start the timing
+    __state = reset_state(stats=__state, ignore=[])
 
     for __batch in __pbar:
         __texts = __batch['text']
@@ -375,6 +401,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
 
             # gradient clipping; unscale first to get true grad norm
             SCALER_OBJ.unscale_(OPTIMIZER_OBJ)
+            __state['train/gradient/rate'] = deformers.monitoring.current_lr(OPTIMIZER_OBJ)
             __state['train/gradient/norm'] = torch.nn.utils.clip_grad_norm_(
                 PREFIX_MOD.parameters(),
                 max_norm=GRADIENT_CFG['max_norm']).item()
@@ -388,40 +415,34 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             __state['train/iter/time'] = time.monotonic() - __state['train/iter/start']
             __state['train/iter/tps'] = deformers.monitoring.throughput(BATCH_LEN, __state['train/iter/time'])
 
-            # __state['train/loss/total'] is already mean(total_loss) over the window
-            __state['train/gradient/rate'] = deformers.monitoring.current_lr(OPTIMIZER_OBJ)
-            __mem = deformers.monitoring.gpu_memory_mb()
+            # track the memory consumption too
+            __state = {**__state, **deformers.monitoring.gpu_memory_mb()}
 
             # stdout: concise line for notebook-visible progress
-            LOG_FILE.write(
-                f"[train] epoch={__epoch + 1}/{TRAINING_CFG["epoch_num"]}"
-                f" step={__step:04d}/{DATASET_DIM}"
-                f" loss={__state['train/loss/total']:.6f}"
-                f" embed={__state['train/loss/embed']:.6f}"
-                f" hidden={__state['train/loss/hidden']:.6f}"
-                f" kl={__state['train/loss/kldiv']:.6f}"
-                f" lr={__state['train/gradient/rate']:.2e}"
-                f" gnorm={__state['train/gradient/norm']:.4f}"
-                f" ms={__state['train/iter/time'] * 1000.0:.0f}"
-                f" tok/s={__state['train/iter/tps']:.0f}\n")
+            LOG_FILE.write(output_state(
+                stats=__state,
+                epoch_num=__epoch + 1,
+                epoch_tot=TRAINING_CFG["epoch_num"],
+                step_num=__step,
+                step_tot=DATASET_DIM,
+                stage_str='train',
+                stage_opt=True) + '\n')
 
             # TensorBoard: all required tags plus KL and throughput
             deformers.monitoring.log_scalars(writer=LOG_TB, step=__step, scalars=__state)
 
             # update progress bar postfix with latest optimizer-step metrics
-            __pbar.set_postfix({
-                'step': f'{__step}/{DATASET_DIM}',
-                'loss': f'{__state['train/loss/total']:.4f}',
-                'embed': f'{__state['train/loss/embed']:.4f}',
-                'hidden': f'{__state['train/loss/hidden']:.4f}',
-                'kl': f'{__state['train/loss/kldiv']:.4f}',
-                'lr': f'{__state['train/gradient/rate']:.1e}',})
+            __pbar.set_postfix(output_state(
+                stats=__state,
+                epoch_num=__epoch + 1,
+                epoch_tot=TRAINING_CFG["epoch_num"],
+                step_num=__step,
+                step_tot=DATASET_DIM,
+                stage_str='train',
+                stage_opt=False))
 
-            # reset accumulators for next window
-            __state['train/loss/total'] = 0.0
-            __state['train/loss/embed'] = 0.0
-            __state['train/loss/hidden'] = 0.0
-            __state['train/iter/start'] = time.monotonic()
+            # reset the accumulators and start the timing
+            __state = reset_state(stats=__state, ignore=[])
 
         # track the global step (across epochs)
         __step += 1
