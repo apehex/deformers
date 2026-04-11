@@ -214,28 +214,35 @@ def init_state() -> dict:
         'gpu/memory/allocated': 0.0,
         'gpu/memory/reserved': 0.0,}
 
-def reset_state(stats: dict, ignore: list=[]) -> dict:
+def reset_state(state: dict, ignore: list=[]) -> dict:
     """Reset all the tracked state variables."""
     return {
         __k: __v if (__k in ignore) else (time.monotonic() if (__k == 'train/iter/start') else 0.0)
-        for (__k, __v) in stats.items()}
+        for (__k, __v) in state.items()}
 
-def output_state(
-    stats: dict,
+def format_state(
+    state: dict,
     epoch_num: int,
     epoch_tot: int,
     step_num: int,
     step_tot: int,
-    stage_str: str='train',
-    stage_opt: bool=True,
+) -> dict:
+    """Group and format the state variables to export them."""
+    return {
+        'epoch': f"({epoch_num}/{epoch_tot})",
+        'step': f"({step_num}/{step_tot})",
+        'loss': f"(total: {state['train/loss/total']:.6f} embed: {state['train/loss/embed']:.6f} hidden: {state['train/loss/hidden']:.6f} kl: {state['train/loss/kldiv']:.6f})",
+        'gradient': f"(rate: {state['train/gradient/rate']:.2e} norm: {state['train/gradient/norm']:.4f})",
+        'iter': f"(time: {state['train/iter/time'] * 1000.0:.0f} tok/s: {state['train/iter/tps']:.0f})",}
+
+def serialize_state(
+    state: dict,
+    prefix: str='[train] ',
 ) -> str:
-    """Serialize the state variables to monitor the progress."""
-    return (
-        f"[{stage_str}] epoch({epoch_num}/{epoch_tot})" * stage_opt
-        f" step({step_num:04d}/{step_tot})"
-        f" loss(total={stats['train/loss/total']:.6f} embed={stats['train/loss/embed']:.6f} hidden={stats['train/loss/hidden']:.6f} kl={stats['train/loss/kldiv']:.6f})"
-        f" gradient(rate={stats['train/gradient/rate']:.2e} norm={stats['train/gradient/norm']:.4f})"
-        f" iter(time={stats['train/iter/time'] * 1000.0:.0f} tok/s={stats['train/iter/tps']:.0f})")
+    """Serialize the state variables into a single string."""
+    return prefix + ' '.join([
+        f'{__k}{state[__k]}'
+        for __k in state.keys()])
 
 # DATASET ######################################################################
 
@@ -330,7 +337,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         leave=True)
 
     # reset the accumulators and start the timing
-    __state = reset_state(stats=__state, ignore=[])
+    __state = reset_state(state=__state, ignore=[])
 
     for __batch in __pbar:
         __texts = __batch['text']
@@ -418,31 +425,25 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             # track the memory consumption too
             __state = {**__state, **deformers.monitoring.gpu_memory_mb()}
 
-            # stdout: concise line for notebook-visible progress
-            LOG_FILE.write(output_state(
-                stats=__state,
+            # format the state for logging
+            __stats = format_state(
+                state=__state,
                 epoch_num=__epoch + 1,
                 epoch_tot=TRAINING_CFG["epoch_num"],
                 step_num=__step,
-                step_tot=DATASET_DIM,
-                stage_str='train',
-                stage_opt=True) + '\n')
+                step_tot=DATASET_DIM)
 
-            # TensorBoard: all required tags plus KL and throughput
+            # write all the stats to the log file
+            LOG_FILE.write(serialize_state(state=__stats, prefix='[train] ') + '\n')
+
+            # write all the stats to the tensorboard summary
             deformers.monitoring.log_scalars(writer=LOG_TB, step=__step, scalars=__state)
 
-            # update progress bar postfix with latest optimizer-step metrics
-            __pbar.set_postfix(output_state(
-                stats=__state,
-                epoch_num=__epoch + 1,
-                epoch_tot=TRAINING_CFG["epoch_num"],
-                step_num=__step,
-                step_tot=DATASET_DIM,
-                stage_str='train',
-                stage_opt=False))
+            # filter the epoch and step since they are already in the pbar
+            __pbar.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
 
             # reset the accumulators and start the timing
-            __state = reset_state(stats=__state, ignore=[])
+            __state = reset_state(state=__state, ignore=[])
 
         # track the global step (across epochs)
         __step += 1
@@ -450,9 +451,9 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
     # cleanup
     __pbar.close()
 
-# EXPORT #######################################################################
+# POST PROCESSING ##############################################################
 
-print('[post] closing the logging streams...')
+print('[post] closing the log streams...')
 LOG_TB.close()
 LOG_FILE.close()
 
