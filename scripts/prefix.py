@@ -257,7 +257,8 @@ MIXED_CTX = (
 # LOGGING ######################################################################
 
 print('[init] logging to {}...'.format(os.path.dirname(LOGGING_CFG['log_path'])))
-TB_WRITER = torch.utils.tensorboard.SummaryWriter(log_dir=os.path.dirname(LOGGING_CFG['log_path']))
+LOG_TB = torch.utils.tensorboard.SummaryWriter(log_dir=os.path.dirname(LOGGING_CFG['log_path']))
+LOG_FILE = open(LOGGING_CFG['log_path'], 'w')
 
 print('[init] calculating the training metadata...')
 DATASET_DIM = len(DATASET_OBJ) // BATCH_CFG['batch_dim']
@@ -387,20 +388,20 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             __mem = deformers.monitoring.gpu_memory_mb()
 
             # stdout: concise line for notebook-visible progress
-            print(
-                f'[train] epoch={__epoch + 1}/{TRAINING_CFG["epoch_num"]}'
-                f' step={__step:04d}/{DATASET_DIM}'
-                f' loss={__state['train/loss/total']:.6f}'
-                f' embed={__state['train/loss/embed']:.6f}'
-                f' hidden={__state['train/loss/hidden']:.6f}'
-                f' kl={__state['train/loss/kldiv']:.6f}'
-                f' lr={__state['train/gradient/rate']:.2e}'
-                f' gnorm={__state['train/gradient/norm']:.4f}'
-                f' ms={__state['train/iter/time'] * 1000.0:.0f}'
-                f' tok/s={__state['train/iter/tps']:.0f}')
+            LOG_FILE.write(
+                f"[train] epoch={__epoch + 1}/{TRAINING_CFG["epoch_num"]}"
+                f" step={__step:04d}/{DATASET_DIM}"
+                f" loss={__state['train/loss/total']:.6f}"
+                f" embed={__state['train/loss/embed']:.6f}"
+                f" hidden={__state['train/loss/hidden']:.6f}"
+                f" kl={__state['train/loss/kldiv']:.6f}"
+                f" lr={__state['train/gradient/rate']:.2e}"
+                f" gnorm={__state['train/gradient/norm']:.4f}"
+                f" ms={__state['train/iter/time'] * 1000.0:.0f}"
+                f" tok/s={__state['train/iter/tps']:.0f}\n")
 
             # TensorBoard: all required tags plus KL and throughput
-            deformers.monitoring.log_scalars(writer=TB_WRITER, step=__step, scalars=__state)
+            deformers.monitoring.log_scalars(writer=LOG_TB, step=__step, scalars=__state)
 
             # update progress bar postfix with latest optimizer-step metrics
             __pbar.set_postfix({
@@ -423,10 +424,11 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
     # cleanup
     __pbar.close()
 
-# close TensorBoard writer
-TB_WRITER.close()
-
 # EXPORT #######################################################################
 
-print(f'[train] saving prefix to {OUTPUT_CFG["save_path"]}...')
+print('[post] closing the logging streams...')
+LOG_TB.close()
+LOG_FILE.close()
+
+print(f'[post] saving prefix to {OUTPUT_CFG["save_path"]}...')
 save_checkpoint(model_obj=PREFIX_MOD, path_str=OUTPUT_CFG['save_path'])
