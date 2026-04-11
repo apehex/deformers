@@ -191,8 +191,10 @@ def compute_loss(
         teacher_residuals.float())
     # combine the losses
     __loss = residuals_rate * __loss_residuals + embeds_rate * __loss_embeds
-    # scale to the accumulation batch size; return components for monitoring
-    return __loss / float(max(1, accumulation_num)), __loss_embeds.detach(), __loss_residuals.detach()
+    # average over the gradient accumulation steps
+    __factor = float(max(1, accumulation_num))
+    # return the components for monitoring
+    return (__loss_embeds.detach() / __factor, __loss_residuals.detach() / __factor, __loss / __factor)
 
 # DATASET ######################################################################
 
@@ -272,7 +274,6 @@ __state = {
     'train/iter/start': 0.0,
     'train/iter/time': 0.0,
     'train/iter/tps': 0.0,
-    'train/iter/bps': 0.0,
     'train/gradient/rate': 0.0,
     'train/gradient/norm': 0.0,
     'train/loss/total': 0.0,
@@ -344,8 +345,8 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
                 attention_mask=__mask_arr,
                 use_cache=False).last_hidden_state
 
-            # combination of the MSE at depth 0 and k; also returns unscaled components
-            __loss, __embed_mse_t, __hidden_mse_t = compute_loss(
+            # combination of the MSE at depth 0 and k
+            __losses = compute_loss(
                 teacher_embeds=__teacher_embeds,
                 student_embeds=__student_embeds,
                 teacher_residuals=__teacher_residuals,
@@ -354,11 +355,13 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
                 residuals_rate=LOSS_CFG['residuals_rate'],
                 accumulation_num=GRADIENT_CFG['accumulation_num'])
 
-        SCALER_OBJ.scale(__loss).backward()
-        # __state['train/loss/total'] is sum of (loss / accumulation_num) = mean(loss) after N steps
-        __state['train/loss/total'] += __loss.item()
-        __state['train/loss/embed'] += __embed_mse_t.item() / GRADIENT_CFG['accumulation_num']
-        __state['train/loss/hidden'] += __hidden_mse_t.item() / GRADIENT_CFG['accumulation_num']
+        # perform the backward propagation of the loss
+        SCALER_OBJ.scale(__losses[-1]).backward()
+
+        # the total loss is the average loss after N accumulation steps
+        __state['train/loss/embed'] += __losses[0].item()
+        __state['train/loss/hidden'] += __losses[1].item()
+        __state['train/loss/total'] += __losses[-1].item()
 
         # optimizer step after gradient accumulation
         if (__step + 1) % GRADIENT_CFG['accumulation_num'] == 0:
@@ -375,6 +378,8 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             __state['train/gradient/norm'] = torch.nn.utils.clip_grad_norm_(
                 PREFIX_MOD.parameters(),
                 max_norm=GRADIENT_CFG['max_norm']).item()
+
+            # update the weights
             SCALER_OBJ.step(OPTIMIZER_OBJ)
             SCALER_OBJ.update()
             OPTIMIZER_OBJ.zero_grad()
