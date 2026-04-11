@@ -126,7 +126,7 @@ GRADIENT_CFG = {
     'max_norm': 1.0,}
 
 LOSS_CFG = {
-    'embeds_rate': 0.1,
+    'embeds_rate': 1.0,
     'residuals_rate': 1.0,}
 
 # OUTPUT CONFIG ################################################################
