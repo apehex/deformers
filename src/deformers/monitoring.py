@@ -20,11 +20,11 @@ def gpu_memory_mb(
     device: str='',
 ) -> dict[str, float]:
     """Return current GPU memory stats in MB."""
-    __stats = {'allocated_mb': 0.0, 'reserved_mb': 0.0}
+    __stats = {'gpu/memory/allocated': 0.0, 'gpu/memory/reserved': 0.0}
     # in mega bytes
     if torch.cuda.is_available() and device:
-        __stats['allocated_mb'] = torch.cuda.memory_allocated(device) / float(2 ** 20)
-        __stats['reserved_mb']= torch.cuda.memory_reserved(device) / float(2 ** 20)
+        __stats['gpu/memory/allocated'] = torch.cuda.memory_allocated(device) / float(2 ** 20)
+        __stats['gpu/memory/reserved']= torch.cuda.memory_reserved(device) / float(2 ** 20)
     # defaults to 0
     return __stats
 
@@ -41,7 +41,6 @@ def current_lr(
 def throughput(
     count: int,
     elapsed: float,
-    epsilon: float=1e-6,
 ) -> float:
     """Compute items per second from a count and an elapsed wall time."""
     return (float(count) / elapsed) if  (elapsed > 0.0) else 0.0
