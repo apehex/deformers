@@ -37,6 +37,7 @@ import huggingface_hub
 import torch
 import torch.amp
 import torch.nn
+import torch.optim
 import torch.utils.tensorboard
 import tqdm
 import transformers
@@ -171,6 +172,42 @@ def load_checkpoint(
     # alternative transformer prefix
     return __prefix.to(device=device_str)
 
+# OPTIM UTILS ##################################################################
+
+def build_scheduler(
+    optimizer_obj: object,
+    step_num: int,
+    warmup_rate: float=0.05,
+    hold_rate: float=0.05,
+    start_rate: float=1e-4,
+    end_rate: float=1e-2,
+) -> object:
+    # number of steps for each phase
+    __warmup_num = max(1, int(warmup_rate * step_num))
+    __hold_num = max(1, int(hold_rate * step_num))
+    __decary_num = max(1, step_num - __warmup_num - __hold_num)
+    # linear ramp from 0 to 1
+    __warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer=optimizer_obj,
+        start_factor=start_rate,
+        end_factor=1.0,
+        total_iters=__warmup_num)
+    # hold at the maximum learning rate
+    __hold = torch.optim.lr_scheduler.ConstantLR(
+        optimizer=optimizer_obj,
+        factor=1.0,
+        total_iters=__hold_num)
+    # decay for the remaining steps
+    __decay = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer=optimizer_obj,
+        T_max=__decary_num,
+        eta_min=optimizer_obj.param_groups[0]['lr'] * end_rate)
+    # chain the 3 phases
+    return torch.optim.lr_scheduler.SequentialLR(
+        optimizer=optimizer_obj,
+        schedulers=[__warmup, __hold, __decay],
+        milestones=[__warmup_num, __warmup_num + __hold_num],)
+
 # LOSS UTILS ###################################################################
 
 def compute_loss(
@@ -252,6 +289,10 @@ DATASET_OBJ = datasets.load_dataset(**DATASET_CFG)
 print('[init] preprocessing the dataset...')
 DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed_num'])
 
+print('[init] calculating the training metadata...')
+DATASET_DIM = len(DATASET_OBJ) // BATCH_CFG['batch_dim']
+BATCH_LEN = BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'] * GRADIENT_CFG['accumulation_num']
+
 # TOKENIZERS ###################################################################
 
 print('[init] loading the tokenizers...')
@@ -298,6 +339,15 @@ print('[init] creating optimizer...')
 OPTIMIZER_OBJ = torch.optim.AdamW(PREFIX_MOD.parameters(), **OPTIMIZER_CFG)
 SCALER_OBJ = torch.amp.GradScaler(**SCALER_CFG)
 
+print('[init] creating scheduler...')
+SCHEDULER_OBJ = build_scheduler(
+    optimizer_obj=OPTIMIZER_OBJ,
+    step_num=(DATASET_DIM * TRAINING_CFG['epoch_num']) // GRADIENT_CFG['accumulation_num'],
+    warmup_rate=0.01,
+    hold_rate=0.0,
+    start_rate=1e-4,
+    end_rate=1e-2)
+
 print('[init] enabling mixed precision...')
 MIXED_CTX = (
     torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
@@ -309,10 +359,6 @@ MIXED_CTX = (
 print('[init] logging to {}...'.format(os.path.dirname(LOGGING_CFG['log_path'])))
 LOG_TB = torch.utils.tensorboard.SummaryWriter(log_dir=os.path.dirname(LOGGING_CFG['log_path']))
 LOG_FILE = open(LOGGING_CFG['log_path'], 'w')
-
-print('[init] calculating the training metadata...')
-DATASET_DIM = len(DATASET_OBJ) // BATCH_CFG['batch_dim']
-BATCH_LEN = BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'] * GRADIENT_CFG['accumulation_num']
 
 # ZERO #########################################################################
 
@@ -416,6 +462,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             # update the weights
             SCALER_OBJ.step(OPTIMIZER_OBJ)
             SCALER_OBJ.update()
+            SCHEDULER_OBJ.step()
             OPTIMIZER_OBJ.zero_grad()
 
             # timing and throughput
