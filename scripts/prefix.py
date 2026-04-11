@@ -444,13 +444,8 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
 
         # optimizer step after gradient accumulation
         if (__step + 1) % GRADIENT_CFG['accumulation_num'] == 0:
-            # compute KL from last micro-batch hidden states (monitoring only)
-            # uses first batch item only to avoid large logit tensors (B, T, V)
-            with torch.no_grad():
-                __t_logits = SOURCE_MOD.lm_head(__teacher_residuals[:1])
-                __s_logits = SOURCE_MOD.lm_head(__student_residuals[:1].detach())
-            __state['train/loss/kldiv'] = deformers.pipelines.eval.kl_divergence(__t_logits, __s_logits).item()
-            del __t_logits, __s_logits
+            # compute KL from the hidden states (monitoring only)
+            __state['train/loss/kldiv'] = deformers.pipelines.eval.kl_divergence(__teacher_residuals, __student_residuals).item()
 
             # gradient clipping; unscale first to get true grad norm
             SCALER_OBJ.unscale_(OPTIMIZER_OBJ)
