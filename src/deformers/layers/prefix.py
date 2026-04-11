@@ -72,8 +72,9 @@ class CompositeBytePrefix(torch.nn.Module):
                     merge_axes=True),
                 # (B, T, G*E) => (B, T, G*E)
                 torch.nn.LayerNorm(
-                    normalized_shape=__embed_dim,
-                    bias=True),
+                    num_groups=__group_dim,
+                    num_channels=__embed_dim,
+                    affine=True),
                 # (B, T, G*E) => (B, T, H)
                 torch.nn.Linear(
                     in_features=__embed_dim,
@@ -85,10 +86,6 @@ class CompositeBytePrefix(torch.nn.Module):
                 torch.nn.Linear(
                     in_features=__latent_dim,
                     out_features=__latent_dim,
-                    bias=True),
-                # (B, T, H) => (B, T, H)
-                torch.nn.LayerNorm(
-                    normalized_shape=__latent_dim,
                     bias=True))
             # move to the target device at build time (no-op if device is None)
             if device_str:
