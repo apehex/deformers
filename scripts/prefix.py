@@ -58,9 +58,9 @@ MAIN_CFG = {
     'device_str': 'cuda' if torch.cuda.is_available() else 'cpu',
     'encoding_str': 'utf-8',
     'seed_num': 1337,
-    'batch_dim': 32,
+    'batch_dim': 64,
     'sequence_dim': 256,
-    'patch_dim': 64,
+    'patch_dim': 32,
     'depth_num': 1,
     'epoch_num': 4,
     'accumulation_num': 4,}
