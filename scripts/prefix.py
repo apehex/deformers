@@ -42,6 +42,7 @@ import torch.utils.tensorboard
 import tqdm
 import transformers
 
+import mlable.utils
 
 import deformers.layers.prefix
 import deformers.models.generic
@@ -244,6 +245,7 @@ def init_state() -> dict:
         'train/iter/tps': 0.0,
         'train/gradient/rate': 0.0,
         'train/gradient/norm': 0.0,
+        'train/loss/ema': 0.0,
         'train/loss/total': 0.0,
         'train/loss/embed': 0.0,
         'train/loss/hidden': 0.0,
@@ -268,8 +270,8 @@ def format_state(
     return {
         'epoch': f"({epoch_num}/{epoch_tot})",
         'step': f"({step_num}/{step_tot})",
-        'loss': f"(total: {state['train/loss/total']:.6f} embed: {state['train/loss/embed']:.6f} hidden: {state['train/loss/hidden']:.6f} kl: {state['train/loss/kldiv']:.6f})",
-        'gradient': f"(rate: {state['train/gradient/rate']:.2e} norm: {state['train/gradient/norm']:.4f})",
+        'loss': f"(ema: {state['train/loss/ema']:.4e} total: {state['train/loss/total']:.4e} embed: {state['train/loss/embed']:.4e} hidden: {state['train/loss/hidden']:.4e} kl: {state['train/loss/kldiv']:.4e})",
+        'gradient': f"(rate: {state['train/gradient/rate']:.2e} norm: {state['train/gradient/norm']:.4e})",
         'iter': f"(time: {state['train/iter/time'] * 1000.0:.0f} tok/s: {state['train/iter/tps']:.0f})",}
 
 def serialize_state(
@@ -441,6 +443,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __state['train/loss/embed'] += __losses[0].item()
         __state['train/loss/hidden'] += __losses[1].item()
         __state['train/loss/total'] += __losses[-1].item()
+        __state['train/loss/ema'] += mlable.utils.ema(average=__state['train/loss/ema'], current=__losses[-1].item(), factor=0.99)
 
         # optimizer step after gradient accumulation
         if (__step + 1) % GRADIENT_CFG['accumulation_num'] == 0:
