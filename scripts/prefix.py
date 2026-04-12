@@ -250,6 +250,9 @@ def init_state() -> dict:
         'train/loss/embed': 0.0,
         'train/loss/hidden': 0.0,
         'train/loss/kldiv': 0.0,
+        'train/vocab/seen': 0.0,
+        'train/vocab/max': 0.0,
+        'train/vocab/avg': 0.0,
         'gpu/memory/allocated': 0.0,
         'gpu/memory/reserved': 0.0,}
 
@@ -272,7 +275,8 @@ def format_state(
         'step': f"({step_num}/{step_tot})",
         'loss': f"(ema: {state['train/loss/ema']:.4e} total: {state['train/loss/total']:.4e} embed: {state['train/loss/embed']:.4e} hidden: {state['train/loss/hidden']:.4e} kl: {state['train/loss/kldiv']:.4e})",
         'gradient': f"(rate: {state['train/gradient/rate']:.2e} norm: {state['train/gradient/norm']:.4e})",
-        'iter': f"(time: {state['train/iter/time'] * 1000.0:.0f} tok/s: {state['train/iter/tps']:.0f})",}
+        'iter': f"(time: {state['train/iter/time'] * 1000.0:.0f} tok/s: {state['train/iter/tps']:.0f})",
+        'vocab': f"(seen: {state['train/vocab/seen'] * 100.0:.1f} max: {state['train/vocab/max'] * 100.0:.1f} avg: {state['train/vocab/avg'] * 100.0:.1f})",}
 
 def serialize_state(
     state: dict,
@@ -300,6 +304,10 @@ BATCH_LEN = BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'] * GRADIENT_CFG['a
 print('[init] loading the tokenizers...')
 TEXT_TOK = transformers.AutoTokenizer.from_pretrained(**TOKEN_CFG)
 BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(**BYTE_CFG)
+
+print('[init] calculating the tokenizer metadata...')
+VOCAB_ARR = {__v: __k for (__k, __v) in TEXT_TOK.get_vocab().items()}
+VOCAB_LEN = len(VOCAB_ARR)
 
 # MODELS #######################################################################
 
@@ -367,6 +375,7 @@ LOG_FILE = open(LOGGING_CFG['log_path'], 'w')
 print('[init] zeroing the state...')
 __step = 0
 __state = init_state()
+__count = torch.zeros(size=(VOCAB_LEN,), dtype=torch.long, device='cpu')
 
 OPTIMIZER_OBJ.zero_grad()
 
@@ -409,6 +418,12 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __tokens_arr = torch.tensor(__inputs['input_ids'], dtype=torch.long, device=MAIN_CFG['device_str'])
         __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.long, device=MAIN_CFG['device_str'])
         __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=MAIN_CFG['device_str'])
+
+        # track token stats
+        __count += torch.bincount(__tokens_arr.flatten().cpu(), minlength=VOCAB_LEN)
+        __state['train/vocab/seen'] = float((__count > 0).sum().item()) / VOCAB_LEN
+        __state['train/vocab/max'] = float(__count.max().item()) / VOCAB_LEN
+        __state['train/vocab/avg'] = float(__count.sum().item()) / VOCAB_LEN
 
         # teacher forward: get original embeddings and hidden states (no grad)
         with torch.no_grad():
