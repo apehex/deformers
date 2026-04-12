@@ -245,14 +245,13 @@ def init_state() -> dict:
         'train/iter/tps': 0.0,
         'train/gradient/rate': 0.0,
         'train/gradient/norm': 0.0,
-        'train/loss/ema': 0.0,
+        'train/loss/ema': 1.0,
         'train/loss/total': 0.0,
         'train/loss/embed': 0.0,
         'train/loss/hidden': 0.0,
         'train/loss/kldiv': 0.0,
         'train/vocab/seen': 0.0,
         'train/vocab/max': 0.0,
-        'train/vocab/avg': 0.0,
         'gpu/memory/allocated': 0.0,
         'gpu/memory/reserved': 0.0,}
 
@@ -273,10 +272,10 @@ def format_state(
     return {
         'epoch': f"({epoch_num}/{epoch_tot})",
         'step': f"({step_num}/{step_tot})",
-        'loss': f"(ema: {state['train/loss/ema']:.4e} total: {state['train/loss/total']:.4e} embed: {state['train/loss/embed']:.4e} hidden: {state['train/loss/hidden']:.4e} kl: {state['train/loss/kldiv']:.4e})",
-        'gradient': f"(rate: {state['train/gradient/rate']:.2e} norm: {state['train/gradient/norm']:.4e})",
+        'loss': f"(ema: {state['train/loss/ema']:.6f} total: {state['train/loss/total']:.6f} embed: {state['train/loss/embed']:.6f} hidden: {state['train/loss/hidden']:.6f} kl: {state['train/loss/kldiv']:.6f})",
+        'gradient': f"(rate: {state['train/gradient/rate']:.2e} norm: {state['train/gradient/norm']:.4f})",
         'iter': f"(time: {state['train/iter/time'] * 1000.0:.0f} tok/s: {state['train/iter/tps']:.0f})",
-        'vocab': f"(seen: {state['train/vocab/seen'] * 100.0:.1f} max: {state['train/vocab/max'] * 100.0:.1f} avg: {state['train/vocab/avg'] * 100.0:.1f})",}
+        'vocab': f"(seen: {state['train/vocab/seen'] * 100.0:.1f}% max: {state['train/vocab/max'] * 100.0:.1f}%)",}
 
 def serialize_state(
     state: dict,
@@ -394,7 +393,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         leave=True)
 
     # reset the accumulators and start the timing
-    __state = reset_state(state=__state, ignore=[])
+    __state = reset_state(state=__state, ignore=['train/loss/ema'])
 
     for __batch in __pbar:
         __texts = __batch['text']
@@ -422,8 +421,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         # track token stats
         __count += torch.bincount(__tokens_arr.flatten().cpu(), minlength=VOCAB_LEN)
         __state['train/vocab/seen'] = float((__count > 0).sum().item()) / VOCAB_LEN
-        __state['train/vocab/max'] = float(__count.max().item()) / VOCAB_LEN
-        __state['train/vocab/avg'] = float(__count.sum().item()) / VOCAB_LEN
+        __state['train/vocab/max'] = float(__count.max().item()) / float(__count.sum().item())
 
         # teacher forward: get original embeddings and hidden states (no grad)
         with torch.no_grad():
@@ -458,12 +456,14 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __state['train/loss/embed'] += __losses[0].item()
         __state['train/loss/hidden'] += __losses[1].item()
         __state['train/loss/total'] += __losses[-1].item()
-        __state['train/loss/ema'] += mlable.utils.ema(average=__state['train/loss/ema'], current=__losses[-1].item(), factor=0.99)
 
         # optimizer step after gradient accumulation
         if (__step + 1) % GRADIENT_CFG['accumulation_num'] == 0:
             # compute KL from the hidden states (monitoring only)
             __state['train/loss/kldiv'] = deformers.pipelines.eval.kl_divergence(__teacher_residuals, __student_residuals).item()
+
+            # track the loss EMA
+            __state['train/loss/ema'] = mlable.utils.ema(average=__state['train/loss/ema'], current=__state['train/loss/total'], factor=0.99)
 
             # gradient clipping; unscale first to get true grad norm
             SCALER_OBJ.unscale_(OPTIMIZER_OBJ)
@@ -503,7 +503,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             __pbar.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
 
             # reset the accumulators and start the timing
-            __state = reset_state(state=__state, ignore=[])
+            __state = reset_state(state=__state, ignore=['train/loss/ema'])
 
         # track the global step (across epochs)
         __step += 1
