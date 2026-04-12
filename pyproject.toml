@@ -1,6 +1,6 @@
 [project]
 name = "deformers"
-version = "0.3.2"
+version = "0.3.3"
 description = "Reverse engineer transformer models."
 authors = [{ name = "apehex", email = "17317183+apehex@users.noreply.github.com" }]
 readme = ".github/README.md"

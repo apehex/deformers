@@ -106,7 +106,7 @@ MODEL_CFG = {
     'ignore_mismatched_sizes': True,}
 
 PREFIX_CFG = {
-    'embed_dim': 4096 // BATCH_CFG['patch_dim'],
+    'embed_dim': 256, # 32 * 256 = 8192
     'vocab_dim': 256,
     'latent_dim': 4096,
     'group_dim': -1,}

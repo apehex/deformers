@@ -84,16 +84,16 @@ class CompositeBytePrefix(torch.nn.Module):
                 mlable.layers.shaping.Swap(
                     left_axis=1,
                     right_axis=-1),
+                # (B, T, G*E) => (B, T, G*E)
+                torch.nn.Linear(
+                    in_features=__embed_dim,
+                    out_features=__embed_dim,
+                    bias=True),
+                # (B, T, G*E) => (B, T, G*E)
+                torch.nn.SiLU(),
                 # (B, T, G*E) => (B, T, H)
                 torch.nn.Linear(
                     in_features=__embed_dim,
-                    out_features=__latent_dim,
-                    bias=True),
-                # (B, T, H) => (B, T, H)
-                torch.nn.SiLU(),
-                # (B, T, H) => (B, T, H)
-                torch.nn.Linear(
-                    in_features=__latent_dim,
                     out_features=__latent_dim,
                     bias=True))
             # move to the target device at build time (no-op if device is None)
