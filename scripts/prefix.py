@@ -60,10 +60,10 @@ MAIN_CFG = {
     'seed_num': 1337,
     'batch_dim': 32,
     'sequence_dim': 256,
-    'patch_dim': 32,
-    'depth_num': 4,
+    'patch_dim': 64,
+    'depth_num': 1,
     'epoch_num': 4,
-    'accumulation_num': 8,}
+    'accumulation_num': 4,}
 
 # DATA CONFIG ##################################################################
 
