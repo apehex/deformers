@@ -117,7 +117,7 @@ TRAINING_CFG = {
     'epoch_num': MAIN_CFG['epoch_num'],}
 
 OPTIMIZER_CFG = {
-    'lr': 1e-4,}
+    'lr': 1e-5,}
 
 SCALER_CFG = {
     'enabled': MAIN_CFG['device_str'] == 'cuda',}
@@ -185,7 +185,7 @@ def build_scheduler(
     # number of steps for each phase
     __warmup_num = max(1, int(warmup_rate * step_num))
     __hold_num = max(1, int(hold_rate * step_num))
-    __decary_num = max(1, step_num - __warmup_num - __hold_num)
+    __decay_num = max(1, step_num - __warmup_num - __hold_num)
     # linear ramp from 0 to 1
     __warmup = torch.optim.lr_scheduler.LinearLR(
         optimizer=optimizer_obj,
@@ -200,7 +200,7 @@ def build_scheduler(
     # decay for the remaining steps
     __decay = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer=optimizer_obj,
-        T_max=__decary_num,
+        T_max=__decay_num,
         eta_min=optimizer_obj.param_groups[0]['lr'] * end_rate)
     # chain the 3 phases
     return torch.optim.lr_scheduler.SequentialLR(
@@ -344,7 +344,7 @@ SCHEDULER_OBJ = build_scheduler(
     optimizer_obj=OPTIMIZER_OBJ,
     step_num=(DATASET_DIM * TRAINING_CFG['epoch_num']) // GRADIENT_CFG['accumulation_num'],
     warmup_rate=0.01,
-    hold_rate=0.0,
+    hold_rate=0.001,
     start_rate=1e-4,
     end_rate=1e-2)
 
