@@ -20,26 +20,26 @@ class TestGpuMemoryMb:
 
     def test_returns_dict_with_required_keys(self):
         __result = deformers.pipelines.monitor.gpu_memory_mb()
-        assert 'allocated_mb' in __result
-        assert 'reserved_mb' in __result
+        assert 'gpu/memory/allocated' in __result
+        assert 'gpu/memory/reserved' in __result
 
     def test_cpu_environment_returns_zeros(self):
         # on CPU-only test runners, CUDA is not available
         if torch.cuda.is_available():
             pytest.skip('CUDA available: CPU-zero test not applicable')
         __result = deformers.pipelines.monitor.gpu_memory_mb()
-        assert __result['allocated_mb'] == 0.0
-        assert __result['reserved_mb'] == 0.0
+        assert __result['gpu/memory/allocated'] == 0.0
+        assert __result['gpu/memory/reserved'] == 0.0
 
     def test_values_are_floats(self):
         __result = deformers.pipelines.monitor.gpu_memory_mb()
-        assert isinstance(__result['allocated_mb'], float)
-        assert isinstance(__result['reserved_mb'], float)
+        assert isinstance(__result['gpu/memory/allocated'], float)
+        assert isinstance(__result['gpu/memory/reserved'], float)
 
     def test_values_are_non_negative(self):
         __result = deformers.pipelines.monitor.gpu_memory_mb()
-        assert __result['allocated_mb'] >= 0.0
-        assert __result['reserved_mb'] >= 0.0
+        assert __result['gpu/memory/allocated'] >= 0.0
+        assert __result['gpu/memory/reserved'] >= 0.0
 
 # CURRENT_LR ###################################################################
 
