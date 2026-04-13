@@ -118,7 +118,9 @@ TRAINING_CFG = {
     'epoch_num': MAIN_CFG['epoch_num'],}
 
 OPTIMIZER_CFG = {
-    'lr': 1e-4,}
+    'lr': 1e-4,
+    'betas': (0.9, 0.999),
+    'weight_decay': 0.01,}
 
 SCALER_CFG = {
     'enabled': MAIN_CFG['device_str'] == 'cuda',}
