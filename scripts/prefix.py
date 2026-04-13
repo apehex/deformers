@@ -46,8 +46,8 @@ import mlable.utils
 
 import deformers.layers.prefix
 import deformers.models.generic
-import deformers.monitoring
 import deformers.pipelines.eval
+import deformers.pipelines.monitor
 import deformers.pipelines.patch
 import deformers.tokenizers.byte
 
@@ -469,7 +469,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
 
             # gradient clipping; unscale first to get true grad norm
             SCALER_OBJ.unscale_(OPTIMIZER_OBJ)
-            __state['train/gradient/rate'] = deformers.monitoring.current_lr(OPTIMIZER_OBJ)
+            __state['train/gradient/rate'] = deformers.pipelines.monitor.current_lr(OPTIMIZER_OBJ)
             __state['train/gradient/norm'] = torch.nn.utils.clip_grad_norm_(
                 PREFIX_MOD.parameters(),
                 max_norm=GRADIENT_CFG['max_norm']).item()
@@ -482,10 +482,10 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
 
             # timing and throughput
             __state['train/iter/time'] = time.monotonic() - __state['train/iter/start']
-            __state['train/iter/tps'] = deformers.monitoring.throughput(BATCH_LEN, __state['train/iter/time'])
+            __state['train/iter/tps'] = deformers.pipelines.monitor.throughput(BATCH_LEN, __state['train/iter/time'])
 
             # track the memory consumption too
-            __state = {**__state, **deformers.monitoring.gpu_memory_mb()}
+            __state = {**__state, **deformers.pipelines.monitor.gpu_memory_mb()}
 
             # format the state for logging
             __stats = format_state(
@@ -499,7 +499,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             LOG_FILE.write(serialize_state(state=__stats, prefix='[train] ') + '\n')
 
             # write all the stats to the tensorboard summary
-            deformers.monitoring.log_scalars(writer=LOG_TB, step=__step, scalars=__state)
+            deformers.pipelines.monitor.log_scalars(writer=LOG_TB, step=__step, scalars=__state)
 
             # filter the epoch and step since they are already in the pbar
             __pbar.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})

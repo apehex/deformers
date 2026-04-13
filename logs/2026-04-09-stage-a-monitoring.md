@@ -4,7 +4,7 @@ Date: 2026-04-09
 
 ## What was implemented
 
-### src/deformers/monitoring.py
+### src/deformers/pipelines/monitor.py
 
 New generic monitoring utilities module. All functions are CPU/GPU agnostic,
 stateless, and import only torch. Not specific to any experiment.
