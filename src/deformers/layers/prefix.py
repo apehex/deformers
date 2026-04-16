@@ -2,6 +2,7 @@ import torch
 import torch.nn
 
 import mlable.layers.embedding
+import mlable.layers.normalization
 import mlable.layers.shaping
 
 # META #########################################################################
@@ -71,19 +72,11 @@ class CompositeBytePrefix(torch.nn.Module):
                     output_dim=self._config['embed_dim'],
                     group_dim=self._config['group_dim'],
                     merge_axes=True),
-                # (B, T, G*E) => (B, G*E, T)
-                mlable.layers.shaping.Swap(
-                    left_axis=1,
-                    right_axis=-1),
-                # (B, G*E, T) => (B, G*E, T)
-                torch.nn.GroupNorm(
-                    num_groups=__group_dim,
-                    num_channels=__embed_dim,
-                    affine=True),
-                # (B, G*E, T) => (B, T, G*E)
-                mlable.layers.shaping.Swap(
-                    left_axis=1,
-                    right_axis=-1),
+                # (B, T, G*E) => (B, T, G*E)
+                mlable.layers.normalization.GroupNorm(
+                    group_num=__group_dim,
+                    group_axis=-1,
+                    affine_opt=True),
                 # (B, T, G*E) => (B, T, G*E)
                 torch.nn.Linear(
                     in_features=__embed_dim,
