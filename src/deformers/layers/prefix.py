@@ -52,14 +52,15 @@ class CompositeBytePrefix(torch.nn.Module):
         self._layers = None
         self._built = False
 
-    def _build(
+    def build(
         self,
-        shape_arr: tuple,
-        device_str: str=''
+        shape: tuple,
+        device: object=None,
+        dtype: object=None,
     ) -> None:
         if not self._built:
             # actual group dimension: last dim of input when not configured
-            __group_dim = shape_arr[-1] if (self._config['group_dim'] < 1) else self._config['group_dim']
+            __group_dim = shape[-1] if (self._config['group_dim'] < 1) else self._config['group_dim']
             # merged byte embedding dimension after CompositeEmbedding
             __embed_dim = __group_dim * self._config['embed_dim']
             # projection target dimension: defaults to merged embed dim
@@ -90,13 +91,12 @@ class CompositeBytePrefix(torch.nn.Module):
                     out_features=__latent_dim,
                     bias=True))
             # move to the target device at build time (no-op if device is None)
-            if device_str:
-                self._layers = self._layers.to(device=device_str)
+            self._layers = self._layers.to(device=device, dtype=dtype)
             # register the build
             self._built = True
 
-    def forward(self, inputs_arr: torch.Tensor) -> torch.Tensor:
-        __shape = tuple(inputs_arr.shape)
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        __shape = tuple(inputs.shape)
         __group = self._config.get('group_dim', -1)
         # unspecified group dimension: the inputs must already be split into blocks
         if __group <= 0:
@@ -105,6 +105,21 @@ class CompositeBytePrefix(torch.nn.Module):
         else:
             assert len(__shape) == 2, SHAPE_MSG.format(2, __shape, __group)
         # lazy init: build sub-layers on first call, placed on input device
-        self._build(__shape, device_str=inputs_arr.device)
+        self.build(shape=__shape, device=inputs.device, dtype=inputs.dtype)
         # (B, T, G) => (B, T, H) or (B, T*G) => (B, T, H)
-        return self._layers(inputs_arr.to(dtype=torch.long))
+        return self._layers(inputs.to(dtype=torch.long))
+
+    def output_shape(self, shape: tuple) -> tuple:
+        # shape after embedding (B, T, G*E)
+        __shape = self._layers[0].output_shape(shape)
+        # default to G*E when H is not specified
+        __dim = __shape[-1] if (self._config['latent_dim'] < 1) else self._config['latent_dim']
+        # update the last dimension
+        return __shape[:-1] + (__dim,)
+
+    def get_config(self) -> dict:
+        return dict(self._config)
+
+    @classmethod
+    def from_config(cls, config: dict, **kwargs: dict) -> torch.nn.Module:
+        return cls(**{**config, **kwargs})

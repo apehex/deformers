@@ -340,9 +340,10 @@ print('[init] freeing the unused layers...')
 deformers.models.generic.free_memory()
 
 print('[init] building the student...')
-PREFIX_MOD._build(
-    shape_arr=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
-    device_str=MAIN_CFG['device_str'])
+PREFIX_MOD.build(
+    shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
+    device=MAIN_CFG['device_str'],
+    dtype=torch.float32)
 
 # OPTIMIZER ####################################################################
 
