@@ -120,6 +120,22 @@ class CompositeBytePrefix(torch.nn.Module):
     def get_config(self) -> dict:
         return dict(self._config)
 
+    def save_checkpoint(self, path: str) -> None:
+        torch.save({'config': self._config, 'state': self.state_dict()}, path)
+
     @classmethod
     def from_config(cls, config: dict, **kwargs: dict) -> torch.nn.Module:
         return cls(**{**config, **kwargs})
+
+    @classmethod
+    def load_checkpoint(cls, path: str, device: object=None, **kwargs: dict) -> torch.nn.Module:
+        # check the disk
+        assert os.path.isfile(path), f'model checkpoint not found: {path}'
+        # parse the data
+        __ckpt = torch.load(path, map_location=device, weights_only=True)
+        # instantiate the model
+        __prefix = cls(**{**__ckpt['config'], **kwargs})
+        # load the weights
+        __prefix.load_state_dict(__ckpt['state'])
+        # alternative transformer prefix
+        return __prefix.to(device=device)
