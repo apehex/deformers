@@ -55,6 +55,7 @@ import deformers.tokenizers.byte
 # COMMON CONFIG ################################################################
 
 MAIN_CFG = {
+    'resume_opt': True,
     'model_str': 'qwen/qwen3.5-9b',
     'device_str': 'cuda' if torch.cuda.is_available() else 'cpu',
     'encoding_str': 'utf-8',
@@ -142,34 +143,6 @@ LOGGING_CFG = {
 
 OUTPUT_CFG = {
     'save_path': os.path.abspath('checkpoints/prefix.pt'),}
-
-# MODEL UTILS ##################################################################
-
-def save_checkpoint(
-    model_obj: torch.nn.Module,
-    path_str: str=OUTPUT_CFG['save_path'],
-) -> None:
-    torch.save(
-        {
-            'config': model_obj._config,
-            'state_dict': model_obj.state_dict()},
-        path_str)
-
-def load_checkpoint(
-    file_path: str='prefix.pt',
-    device_str: str='cpu',
-) -> object:
-    """Load a model from a local checkpoint or HF hub path."""
-    # check the disk
-    assert os.path.isfile(file_path), f'model checkpoint not found: {file_path}'
-    # parse the data
-    __ckpt = torch.load(file_path, map_location=device_str, weights_only=True)
-    # instantiate the model
-    __prefix = deformers.layers.prefix.CompositeBytePrefix(**__ckpt['config'])
-    # load the weights
-    __prefix.load_state_dict(__ckpt['state_dict'])
-    # alternative transformer prefix
-    return __prefix.to(device=device_str)
 
 # OPTIM UTILS ##################################################################
 
@@ -331,6 +304,10 @@ mlable.models.freeze(SOURCE_MOD)
 
 print('[init] creating the student...')
 PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
+if MAIN_CFG['resume_opt'] and os.path.exists(OUTPUT_CFG['save_path']):
+    PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix.load_checkpoint(
+        path=OUTPUT_CFG['save_path'],
+        device=MAIN_CFG['device_str'])
 
 print('[init] freeing the unused layers...')
 mlable.models.free_memory()
@@ -517,4 +494,4 @@ LOG_TB.close()
 LOG_FILE.close()
 
 print(f'[post] saving prefix to {OUTPUT_CFG["save_path"]}...')
-save_checkpoint(model_obj=PREFIX_MOD, path_str=OUTPUT_CFG['save_path'])
+PREFIX_MOD.save_checkpoint(path=OUTPUT_CFG['save_path'])
