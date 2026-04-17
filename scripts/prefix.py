@@ -145,9 +145,42 @@ LOGGING_CFG = {
 OUTPUT_CFG = {
     'save_path': os.path.abspath('checkpoints/prefix.pt'),}
 
+# PREPROC UTILS ################################################################
+
+def compute_tensors(
+    text_arr: list[str],
+    text_tok: object,
+    byte_tok: object,
+    dtype_obj: object=torch.long,
+    sequence_dim: int=BATCH_CFG['sequence_dim'],
+    patch_dim: int=BATCH_CFG['patch_dim'],
+    device_str: str=MAIN_CFG['device_str']
+) -> tuple[torch.Tensor]:
+    # common casting arguments
+    __args = {'dtype': dtype_obj, 'device': device_str,}
+    # input_ids (B, T) and attention_mask (B, T)
+    __inputs = text_tok(
+        text_arr,
+        return_offsets_mapping=True,
+        max_length=sequence_dim,
+        truncation='longest_first',
+        padding='max_length')
+    # byte patches (B, T, G)
+    __encoded = deformers.pipelines.patch.tokenize_into_bytes(
+        texts_arr=text_arr,
+        offsets_arr=__inputs['offset_mapping'],
+        patch_dim=patch_dim,
+        tokenizer_obj=byte_tok)
+    # format as tensors
+    __tokens_arr = torch.tensor(__inputs['input_ids'], **__args)
+    __mask_arr = torch.tensor(__inputs['attention_mask'], **__args)
+    __bytes_arr = torch.tensor(__encoded, **__args)
+    # (B, T), (B, T), (B, T, G)
+    return __mask_arr, __tokens_arr, __bytes_arr
+
 # LOSS UTILS ###################################################################
 
-def compute_loss(
+def compute_losses(
     student_embeds: torch.Tensor,
     teacher_embeds: torch.Tensor,
     student_residuals: torch.Tensor,
@@ -336,27 +369,18 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
     __state = reset_state(state=__state, ignore=['train/loss/ema'])
 
     for __batch in __pbar:
+        # list of plain strings (B,)
         __texts = __batch['text']
 
-        # input_ids (B, T) and attention_mask (B, T)
-        __inputs = TEXT_TOK(
-            __texts,
-            return_offsets_mapping=True,
-            max_length=BATCH_CFG['sequence_dim'],
-            truncation='longest_first',
-            padding='max_length')
-
-        # byte patches (B, T, G)
-        __encoded = deformers.pipelines.patch.tokenize_into_bytes(
-            texts_arr=__texts,
-            offsets_arr=__inputs['offset_mapping'],
+        # mask (B, T), tokens (B, T), bytes (B, T, G) integers
+        __mask_arr, __tokens_arr, __bytes_arr = compute_tensors(
+            text_arr=__texts,
+            text_tok=TEXT_TOK,
+            byte_tok=BYTE_TOK,
+            dtype_obj=torch.long,
+            sequence_dim=BATCH_CFG['sequence_dim'],
             patch_dim=BATCH_CFG['patch_dim'],
-            tokenizer_obj=BYTE_TOK)
-
-        # format as tensors
-        __tokens_arr = torch.tensor(__inputs['input_ids'], dtype=torch.long, device=MAIN_CFG['device_str'])
-        __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.long, device=MAIN_CFG['device_str'])
-        __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=MAIN_CFG['device_str'])
+            device_str=MAIN_CFG['device_str'])
 
         # track token stats
         __count += torch.bincount(__tokens_arr.flatten().cpu(), minlength=VOCAB_LEN)
@@ -380,7 +404,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
                 use_cache=False).last_hidden_state
 
             # combination of the MSE at depth 0 and k
-            __losses = compute_loss(
+            __losses = compute_losses(
                 teacher_embeds=__teacher_embeds,
                 student_embeds=__student_embeds,
                 teacher_residuals=__teacher_residuals,
