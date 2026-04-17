@@ -42,6 +42,7 @@ import torch.utils.tensorboard
 import tqdm
 import transformers
 
+import mlable.models
 import mlable.utils
 
 import deformers.layers.prefix
@@ -143,11 +144,6 @@ OUTPUT_CFG = {
     'save_path': os.path.abspath('checkpoints/prefix.pt'),}
 
 # MODEL UTILS ##################################################################
-
-def freeze_model(model_obj: torch.nn.Module) -> None:
-    """Disable gradients for all model parameters."""
-    for __p in model_obj.parameters():
-        __p.requires_grad_(False)
 
 def save_checkpoint(
     model_obj: torch.nn.Module,
@@ -331,13 +327,13 @@ SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(config=TRUNK_CFG,
 
 print('[init] freezing the teacher...')
 SOURCE_MOD.eval()
-freeze_model(SOURCE_MOD)
+mlable.models.freeze(SOURCE_MOD)
 
 print('[init] creating the student...')
 PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
 
 print('[init] freeing the unused layers...')
-deformers.models.generic.free_memory()
+mlable.models.free_memory()
 
 print('[init] building the student...')
 PREFIX_MOD.build(

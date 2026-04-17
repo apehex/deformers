@@ -34,6 +34,8 @@ import torch.nn
 import torch.nn.functional
 import transformers
 
+import mlable.models
+
 import deformers.layers.prefix
 import deformers.models.generic
 import deformers.pipelines.eval
@@ -115,11 +117,6 @@ EVAL_CFG = {
     'vocab_probe': True,}
 
 # UTILS ########################################################################
-
-def freeze_model(model: torch.nn.Module) -> None:
-    """Disable gradients for all model parameters."""
-    for __p in model.parameters():
-        __p.requires_grad_(False)
 
 def save_checkpoint(
     model_obj: torch.nn.Module,
@@ -244,10 +241,10 @@ SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(
 
 print('[init] freezing the teacher...')
 SOURCE_MOD.eval()
-freeze_model(SOURCE_MOD)
+mlable.models.freeze(SOURCE_MOD)
 
 print('[init] freeing unused memory...')
-deformers.models.generic.free_memory()
+mlable.models.free_memory()
 
 if REPOSITORY_CFG['repo_path']:
     print('[init] downloading the prefix checkpoint...')

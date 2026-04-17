@@ -6,21 +6,6 @@ import torch.cuda
 import torch.nn
 import transformers
 
-# FREE #########################################################################
-
-def free_memory(
-    model: object=None
-) -> None:
-    # drop references
-    if model is not None:
-        del model
-    # run garbage collection
-    gc.collect()
-    # free CUDA memory
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.ipc_collect()
-
 # PREFIX #######################################################################
 
 def truncate_model(
