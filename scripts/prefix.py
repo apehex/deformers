@@ -43,6 +43,7 @@ import tqdm
 import transformers
 
 import mlable.models
+import mlable.schedulers
 import mlable.utils
 
 import deformers.layers.prefix
@@ -143,42 +144,6 @@ LOGGING_CFG = {
 
 OUTPUT_CFG = {
     'save_path': os.path.abspath('checkpoints/prefix.pt'),}
-
-# OPTIM UTILS ##################################################################
-
-def build_scheduler(
-    optimizer_obj: object,
-    step_num: int,
-    warmup_rate: float=0.05,
-    hold_rate: float=0.05,
-    start_rate: float=1e-4,
-    end_rate: float=1e-2,
-) -> object:
-    # number of steps for each phase
-    __warmup_num = max(1, int(warmup_rate * step_num))
-    __hold_num = max(1, int(hold_rate * step_num))
-    __decay_num = max(1, step_num - __warmup_num - __hold_num)
-    # linear ramp from 0 to 1
-    __warmup = torch.optim.lr_scheduler.LinearLR(
-        optimizer=optimizer_obj,
-        start_factor=start_rate,
-        end_factor=1.0,
-        total_iters=__warmup_num)
-    # hold at the maximum learning rate
-    __hold = torch.optim.lr_scheduler.ConstantLR(
-        optimizer=optimizer_obj,
-        factor=1.0,
-        total_iters=__hold_num)
-    # decay for the remaining steps
-    __decay = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer=optimizer_obj,
-        T_max=__decay_num,
-        eta_min=optimizer_obj.param_groups[0]['lr'] * end_rate)
-    # chain the 3 phases
-    return torch.optim.lr_scheduler.SequentialLR(
-        optimizer=optimizer_obj,
-        schedulers=[__warmup, __hold, __decay],
-        milestones=[__warmup_num, __warmup_num + __hold_num],)
 
 # LOSS UTILS ###################################################################
 
@@ -325,13 +290,12 @@ OPTIMIZER_OBJ = torch.optim.AdamW(PREFIX_MOD.parameters(), **OPTIMIZER_CFG)
 SCALER_OBJ = torch.amp.GradScaler(**SCALER_CFG)
 
 print('[init] creating scheduler...')
-SCHEDULER_OBJ = build_scheduler(
+SCHEDULER_OBJ = mlable.schedulers.WaveLR(
     optimizer_obj=OPTIMIZER_OBJ,
-    step_num=(DATASET_DIM * TRAINING_CFG['epoch_num']) // GRADIENT_CFG['accumulation_num'],
-    warmup_rate=0.01,
-    hold_rate=0.001,
     start_rate=1e-4,
-    end_rate=1e-2)
+    end_rate=1e-2,
+    total_num=(DATASET_DIM * TRAINING_CFG['epoch_num']) // GRADIENT_CFG['accumulation_num'],
+    warmup_num=min(128, DATASET_DIM // GRADIENT_CFG['accumulation_num']))
 
 print('[init] enabling mixed precision...')
 MIXED_CTX = (
