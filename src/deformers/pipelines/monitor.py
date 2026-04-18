@@ -45,10 +45,24 @@ def throughput(
     """Compute items per second from a count and an elapsed wall time."""
     return (float(count) / elapsed) if  (elapsed > 0.0) else 0.0
 
+# STATE ########################################################################
+
+def reset_state(state: dict, update: dict[str, callable], default: callable=lambda __x: 0.0) -> dict:
+    """Reset all the tracked state variables."""
+    return {
+        __k: update.get(__k, default)(__v)
+        for (__k, __v) in state.items()}
+
+def serialize_state(state: dict, prefix: str='[train] ') -> str:
+    """Serialize the state variables into a single string."""
+    return prefix + ' '.join([
+        f'{__k}{state[__k]}'
+        for __k in state.keys()])
+
 # TENSORBOARD ##################################################################
 
 def log_scalars(
-    writer,
+    writer: object,
     scalars: dict[str, float],
     step: int,
 ) -> None:
