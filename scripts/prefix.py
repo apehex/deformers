@@ -209,6 +209,10 @@ def compute_losses(
 
 def init_state() -> dict:
     return {
+        'train/epoch/total': 0.0,
+        'train/epoch/current': 0.0,
+        'train/step/total': 0.0,
+        'train/step/current': 0.0,
         'train/iter/start': time.monotonic(),
         'train/iter/time': 0.0,
         'train/iter/tps': 0.0,
@@ -230,26 +234,17 @@ def reset_state(state: dict, ignore: list=[]) -> dict:
         __k: __v if (__k in ignore) else (time.monotonic() if (__k == 'train/iter/start') else 0.0)
         for (__k, __v) in state.items()}
 
-def format_state(
-    state: dict,
-    epoch_num: int,
-    epoch_tot: int,
-    step_num: int,
-    step_tot: int,
-) -> dict:
+def format_state(state: dict) -> dict:
     """Group and format the state variables to export them."""
     return {
-        'epoch': f"({epoch_num}/{epoch_tot})",
-        'step': f"({step_num}/{step_tot})",
+        'epoch': f"({state['train/epoch/current']}/{state['train/epoch/total']})",
+        'step': f"({state['train/step/current']}/{state['train/step/total']})",
         'loss': f"(ema: {state['train/loss/ema']:.6f} total: {state['train/loss/total']:.6f} embed: {state['train/loss/embed']:.6f} hidden: {state['train/loss/hidden']:.6f} kl: {state['train/loss/kldiv']:.6f})",
         'gradient': f"(rate: {state['train/gradient/rate']:.2e} norm: {state['train/gradient/norm']:.4f})",
         'iter': f"(time: {state['train/iter/time'] * 1000.0:.0f} tok/s: {state['train/iter/tps']:.0f})",
         'vocab': f"(seen: {state['train/vocab/seen'] * 100.0:.1f}% max: {state['train/vocab/max'] * 100.0:.1f}%)",}
 
-def serialize_state(
-    state: dict,
-    prefix: str='[train] ',
-) -> str:
+def serialize_state(state: dict, prefix: str='[train] ') -> str:
     """Serialize the state variables into a single string."""
     return prefix + ' '.join([
         f'{__k}{state[__k]}'
@@ -382,11 +377,6 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             patch_dim=BATCH_CFG['patch_dim'],
             device_str=MAIN_CFG['device_str'])
 
-        # track token stats
-        __count += torch.bincount(__tokens_arr.flatten().cpu(), minlength=VOCAB_LEN)
-        __state['train/vocab/seen'] = float((__count > 0).sum().item()) / VOCAB_LEN
-        __state['train/vocab/max'] = float(__count.max().item()) / float(__count.sum().item())
-
         # teacher forward: get original embeddings and hidden states (no grad)
         with torch.no_grad():
             __teacher_embeds = SOURCE_MOD.model.embed_tokens(__tokens_arr)
@@ -415,6 +405,17 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
 
         # perform the backward propagation of the loss
         SCALER_OBJ.scale(__losses[-1]).backward()
+
+        # track the iteration progress
+        __state['train/epoch/total'] = TRAINING_CFG['epoch_num']
+        __state['train/epoch/current'] = __epoch + 1
+        __state['train/step/total'] = DATASET_DIM
+        __state['train/step/current'] = __step + 1
+
+        # track token stats
+        __count += torch.bincount(__tokens_arr.flatten().cpu(), minlength=VOCAB_LEN)
+        __state['train/vocab/seen'] = float((__count > 0).sum().item()) / VOCAB_LEN
+        __state['train/vocab/max'] = float(__count.max().item()) / float(__count.sum().item())
 
         # the total loss is the average loss after N accumulation steps
         __state['train/loss/embed'] += __losses[0].item()
@@ -450,12 +451,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             __state = {**__state, **deformers.pipelines.monitor.gpu_memory_mb()}
 
             # format the state for logging
-            __stats = format_state(
-                state=__state,
-                epoch_num=__epoch + 1,
-                epoch_tot=TRAINING_CFG["epoch_num"],
-                step_num=__step,
-                step_tot=DATASET_DIM)
+            __stats = format_state(state=__state)
 
             # write all the stats to the log file
             LOG_FILE.write(serialize_state(state=__stats, prefix='[train] ') + '\n')
