@@ -66,7 +66,9 @@ MAIN_CFG = {
     'patch_dim': 32,
     'depth_num': 1,
     'epoch_num': 4,
-    'accumulation_num': 4,}
+    'accumulation_num': 4,
+    'logging_num': 32,
+    'checkpoint_num': 128,}
 
 # DATA CONFIG ##################################################################
 
@@ -129,7 +131,7 @@ SCALER_CFG = {
     'enabled': MAIN_CFG['device_str'] == 'cuda',}
 
 GRADIENT_CFG = {
-    'accumulation_num': MAIN_CFG['accumulation_num'],
+    'step_num': MAIN_CFG['accumulation_num'],
     'max_norm': 1.0,}
 
 LOSS_CFG = {
@@ -159,10 +161,11 @@ STATE_CFG = {
     'gpu/memory/reserved': lambda __x: 0.0,}
 
 LOGGING_CFG = {
-    'step_num': 32,
+    'step_num': MAIN_CFG['logging_num'],
     'log_path': os.path.abspath('logs/prefix.log'),}
 
 OUTPUT_CFG = {
+    'step_num': MAIN_CFG['checkpoint_num'],
     'save_path': os.path.abspath('checkpoints/prefix.pt'),}
 
 # PREPROC UTILS ################################################################
@@ -207,7 +210,7 @@ def compute_losses(
     teacher_residuals: torch.Tensor,
     embeds_rate: float=LOSS_CFG['embeds_rate'],
     residuals_rate: float=LOSS_CFG['residuals_rate'],
-    accumulation_num: int=GRADIENT_CFG['accumulation_num'],
+    accumulation_num: int=GRADIENT_CFG['step_num'],
 ) -> tuple:
     """Compute the combined embedding and hidden-state MSE loss."""
     # MSE on the embeddings
@@ -247,7 +250,7 @@ DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed_num'])
 
 print('[init] calculating the training metadata...')
 DATASET_DIM = len(DATASET_OBJ) // BATCH_CFG['batch_dim']
-BATCH_LEN = BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'] * GRADIENT_CFG['accumulation_num']
+BATCH_LEN = BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'] * GRADIENT_CFG['step_num']
 
 # TOKENIZERS ###################################################################
 
@@ -309,8 +312,8 @@ SCHEDULER_OBJ = mlable.schedulers.WaveLR(
     optimizer_obj=OPTIMIZER_OBJ,
     start_rate=1e-4,
     end_rate=1e-2,
-    total_num=(DATASET_DIM * TRAINING_CFG['epoch_num']) // GRADIENT_CFG['accumulation_num'],
-    warmup_num=min(128, DATASET_DIM // GRADIENT_CFG['accumulation_num']))
+    total_num=(DATASET_DIM * TRAINING_CFG['epoch_num']) // GRADIENT_CFG['step_num'],
+    warmup_num=min(128, DATASET_DIM // GRADIENT_CFG['step_num']))
 
 print('[init] enabling mixed precision...')
 MIXED_CTX = (
@@ -388,7 +391,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
                 student_residuals=__student_residuals,
                 embeds_rate=LOSS_CFG['embeds_rate'],
                 residuals_rate=LOSS_CFG['residuals_rate'],
-                accumulation_num=GRADIENT_CFG['accumulation_num'])
+                accumulation_num=GRADIENT_CFG['step_num'])
 
         # perform the backward propagation of the loss
         SCALER_OBJ.scale(__losses[-1]).backward()
@@ -410,7 +413,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __state['train/loss/total'] += __losses[-1].item()
 
         # optimizer step after gradient accumulation
-        if (__step + 1) % GRADIENT_CFG['accumulation_num'] == 0:
+        if (__step + 1) % GRADIENT_CFG['step_num'] == 0:
             # compute KL from the hidden states (monitoring only)
             __state['train/loss/kldiv'] = deformers.pipelines.eval.kl_divergence(__teacher_residuals, __student_residuals).item()
 
@@ -440,15 +443,24 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             # format the state for logging
             __stats = format_state(state=__state)
 
+            # filter the epoch and step since they are already in the pbar
+            __pbar.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
+
+        # log only a fraction of the steps
+        if (__step + 1) % LOGGING_CFG['step_num'] == 0:
             # write all the stats to the log file
             LOG_FILE.write(deformers.pipelines.monitor.serialize_state(state=__stats, prefix='[train] ') + '\n')
 
             # write all the stats to the tensorboard summary
             deformers.pipelines.monitor.log_scalars(writer=LOG_TB, step=__step, scalars=__state)
 
-            # filter the epoch and step since they are already in the pbar
-            __pbar.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
+        # write to disk sporadically
+        if (__step + 1) % OUTPUT_CFG['step_num'] == 0:
+            # save the weights and config
+            PREFIX_MOD.save_checkpoint(path=OUTPUT_CFG['save_path'])
 
+        # reset only after the gradient accumulation
+        if (__step + 1) % GRADIENT_CFG['step_num'] == 0:
             # reset the accumulators and start the timing
             __state = deformers.pipelines.monitor.reset_state(state=__state, update=STATE_CFG)
 
