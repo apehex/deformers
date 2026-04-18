@@ -59,6 +59,7 @@ MAIN_CFG = {
     'resume_opt': True,
     'model_str': 'qwen/qwen3.5-9b',
     'device_str': 'cuda' if torch.cuda.is_available() else 'cpu',
+    'dtype_obj': torch.bfloat16,
     'encoding_str': 'utf-8',
     'seed_num': 1337,
     'batch_dim': 64,
@@ -128,7 +129,7 @@ OPTIMIZER_CFG = {
     'weight_decay': 0.01,}
 
 SCALER_CFG = {
-    'enabled': MAIN_CFG['device_str'] == 'cuda',}
+    'enabled': MAIN_CFG['dtype_obj'] == torch.float16,}
 
 GRADIENT_CFG = {
     'step_num': MAIN_CFG['accumulation_num'],
@@ -290,6 +291,7 @@ PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device
 if MAIN_CFG['resume_opt'] and os.path.exists(OUTPUT_CFG['save_path']):
     PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix.load_checkpoint(
         path=OUTPUT_CFG['save_path'],
+        shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
         device=MAIN_CFG['device_str'])
 
 print('[init] freeing the unused layers...')
@@ -317,8 +319,8 @@ SCHEDULER_OBJ = mlable.schedulers.WaveLR(
 
 print('[init] enabling mixed precision...')
 MIXED_CTX = (
-    torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
-    if SCALER_CFG['enabled']
+    torch.amp.autocast(device_type=MAIN_CFG['device_str'], dtype=MAIN_CFG['dtype_obj'])
+    if (MAIN_CFG['dtype_obj'] != torch.float32)
     else contextlib.nullcontext())
 
 # LOGGING ######################################################################
