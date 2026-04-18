@@ -417,8 +417,8 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             # compute KL from the hidden states (monitoring only)
             __state['train/loss/kldiv'] = deformers.pipelines.eval.kl_divergence(__teacher_residuals, __student_residuals).item()
 
-            # track the loss EMA, default to the current loss for the first 32 steps
-            __state['train/loss/ema'] = mlable.utils.ema(average=__state['train/loss/ema'], current=__state['train/loss/total'], factor=0.99 * float(__step > 32))
+            # track the loss EMA, default to the current loss for the first 128 steps
+            __state['train/loss/ema'] = mlable.utils.ema(average=__state['train/loss/ema'], current=__state['train/loss/total'], factor=0.99 * float(__step > 128))
 
             # gradient clipping; unscale first to get true grad norm
             SCALER_OBJ.unscale_(OPTIMIZER_OBJ)
