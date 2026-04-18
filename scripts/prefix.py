@@ -138,6 +138,26 @@ LOSS_CFG = {
 
 # OUTPUT CONFIG ################################################################
 
+STATE_CFG = {
+    'train/epoch/total': lambda __x: 0,
+    'train/epoch/current': lambda __x: 0,
+    'train/step/total': lambda __x: 0,
+    'train/step/current': lambda __x: 0,
+    'train/iter/start': lambda __x: time.monotonic(), # start of the gradient acc
+    'train/iter/time': lambda __x: 0.0,
+    'train/iter/tps': lambda __x: 0.0,
+    'train/gradient/rate': lambda __x: 0.0,
+    'train/gradient/norm': lambda __x: 0.0,
+    'train/loss/ema': lambda __x: __x, # keep the current loss EMA
+    'train/loss/total': lambda __x: 0.0,
+    'train/loss/embed': lambda __x: 0.0,
+    'train/loss/hidden': lambda __x: 0.0,
+    'train/loss/kldiv': lambda __x: 0.0,
+    'train/vocab/seen': lambda __x: 0.0,
+    'train/vocab/max': lambda __x: 0.0,
+    'gpu/memory/allocated': lambda __x: 0.0,
+    'gpu/memory/reserved': lambda __x: 0.0,}
+
 LOGGING_CFG = {
     'step_num': 32,
     'log_path': os.path.abspath('logs/prefix.log'),}
@@ -207,33 +227,6 @@ def compute_losses(
 
 # LOGGING UTILS ################################################################
 
-def init_state() -> dict:
-    return {
-        'train/epoch/total': 0.0,
-        'train/epoch/current': 0.0,
-        'train/step/total': 0.0,
-        'train/step/current': 0.0,
-        'train/iter/start': time.monotonic(),
-        'train/iter/time': 0.0,
-        'train/iter/tps': 0.0,
-        'train/gradient/rate': 0.0,
-        'train/gradient/norm': 0.0,
-        'train/loss/ema': 1.0,
-        'train/loss/total': 0.0,
-        'train/loss/embed': 0.0,
-        'train/loss/hidden': 0.0,
-        'train/loss/kldiv': 0.0,
-        'train/vocab/seen': 0.0,
-        'train/vocab/max': 0.0,
-        'gpu/memory/allocated': 0.0,
-        'gpu/memory/reserved': 0.0,}
-
-def reset_state(state: dict, ignore: list=[]) -> dict:
-    """Reset all the tracked state variables."""
-    return {
-        __k: __v if (__k in ignore) else (time.monotonic() if (__k == 'train/iter/start') else 0.0)
-        for (__k, __v) in state.items()}
-
 def format_state(state: dict) -> dict:
     """Group and format the state variables to export them."""
     return {
@@ -243,12 +236,6 @@ def format_state(state: dict) -> dict:
         'gradient': f"(rate: {state['train/gradient/rate']:.2e} norm: {state['train/gradient/norm']:.4f})",
         'iter': f"(time: {state['train/iter/time'] * 1000.0:.0f} tok/s: {state['train/iter/tps']:.0f})",
         'vocab': f"(seen: {state['train/vocab/seen'] * 100.0:.1f}% max: {state['train/vocab/max'] * 100.0:.1f}%)",}
-
-def serialize_state(state: dict, prefix: str='[train] ') -> str:
-    """Serialize the state variables into a single string."""
-    return prefix + ' '.join([
-        f'{__k}{state[__k]}'
-        for __k in state.keys()])
 
 # DATASET ######################################################################
 
@@ -341,7 +328,7 @@ LOG_FILE = open(LOGGING_CFG['log_path'], 'w')
 
 print('[init] zeroing the state...')
 __step = 0
-__state = init_state()
+__state = deformers.pipelines.monitor.reset_state(state={__k: 0.0 for __k in STATE_CFG}, update=STATE_CFG)
 __count = torch.zeros(size=(VOCAB_LEN,), dtype=torch.long, device='cpu')
 
 OPTIMIZER_OBJ.zero_grad()
@@ -361,7 +348,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         leave=True)
 
     # reset the accumulators and start the timing
-    __state = reset_state(state=__state, ignore=['train/loss/ema'])
+    __state = deformers.pipelines.monitor.reset_state(state=__state, update=STATE_CFG)
 
     for __batch in __pbar:
         # list of plain strings (B,)
@@ -427,7 +414,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             # compute KL from the hidden states (monitoring only)
             __state['train/loss/kldiv'] = deformers.pipelines.eval.kl_divergence(__teacher_residuals, __student_residuals).item()
 
-            # track the loss EMA
+            # track the loss EMA, default to the current loss for the first 32 steps
             __state['train/loss/ema'] = mlable.utils.ema(average=__state['train/loss/ema'], current=__state['train/loss/total'], factor=0.99 * float(__step > 32))
 
             # gradient clipping; unscale first to get true grad norm
@@ -454,7 +441,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             __stats = format_state(state=__state)
 
             # write all the stats to the log file
-            LOG_FILE.write(serialize_state(state=__stats, prefix='[train] ') + '\n')
+            LOG_FILE.write(deformers.pipelines.monitor.serialize_state(state=__stats, prefix='[train] ') + '\n')
 
             # write all the stats to the tensorboard summary
             deformers.pipelines.monitor.log_scalars(writer=LOG_TB, step=__step, scalars=__state)
@@ -463,7 +450,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             __pbar.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
 
             # reset the accumulators and start the timing
-            __state = reset_state(state=__state, ignore=['train/loss/ema'])
+            __state = deformers.pipelines.monitor.reset_state(state=__state, update=STATE_CFG)
 
         # track the global step (across epochs)
         __step += 1
