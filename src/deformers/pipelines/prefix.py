@@ -1,3 +1,7 @@
+import torch
+
+import mlable.losses
+
 import deformers.pipelines.patch
 
 # PREPROCESSING ################################################################
@@ -65,3 +69,57 @@ def tensors_from_indices(
     __bytes_arr = torch.tensor(__encoded, **__args)
     # (B, T), (B, T), (B, T, G)
     return __mask_arr, __indices_arr, __bytes_arr
+
+# LOSS #########################################################################
+
+def compute_losses(
+    student_0_arr: torch.Tensor,
+    student_k_arr: torch.Tensor,
+    teacher_0_arr: torch.Tensor,
+    teacher_k_arr: torch.Tensor,
+    mask_arr: torch.Tensor,
+    step_num: int,
+    mse_0_rate: float=1.0,
+    mse_k_rate: float=1.0,
+    kld_0_rate: float=0.0,
+    kld_k_rate: float=0.0,
+) -> tuple:
+    """Compute the combined embedding and hidden-state MSE loss."""
+    assert any((__r > 0.0) for __r in [mse_0_rate, mse_k_rate, kld_0_rate, kld_k_rate])
+    # default to 0 when a factor is null
+    __mse_0, __mse_k, __kld_0, __kld_k = torch.tensor(0.0), torch.tensor(0.0), torch.tensor(0.0), torch.tensor(0.0)
+    # MSE on the embeddings (depth 0)
+    if mse_0_rate > 0.0:
+        __mse_0 = mlable.losses.mse_loss(
+            predict_arr=student_0_arr.float(),
+            target_arr=teacher_0_arr.float(),
+            mask_arr=mask_arr)
+    # MSE on the hidden states at depth k
+    if mse_k_rate > 0.0:
+        __mse_k = mlable.losses.mse_loss(
+            predict_arr=student_k_arr.float(),
+            target_arr=teacher_k_arr.float(),
+            mask_arr=mask_arr)
+    # KL divergence on the embeddings (depth 0)
+    if kld_0_rate > 0.0:
+        __kld_0 = mlable.losses.kl_div(
+            predict_arr=student_0_arr.float(),
+            target_arr=teacher_0_arr.float(),
+            mask_arr=mask_arr)
+    # MSE on the hidden states at depth k
+    if kld_k_rate > 0.0:
+        __kld_k = mlable.losses.kl_div(
+            predict_arr=student_k_arr.float(),
+            target_arr=teacher_k_arr.float(),
+            mask_arr=mask_arr)
+    # combine the losses
+    __loss = mse_0_rate * __mse_0 + mse_k_rate * __mse_k + kld_0_rate * __kld_0 + kld_k_rate * __kld_k
+    # average over the gradient accumulation steps
+    __factor = float(max(1, step_num))
+    # return the components for monitoring
+    return (
+        __mse_0.detach() / __factor,
+        __mse_k.detach() / __factor,
+        __kld_0.detach() / __factor,
+        __kld_k.detach() / __factor,
+        __loss / __factor)
