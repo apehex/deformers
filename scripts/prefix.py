@@ -135,6 +135,12 @@ GRADIENT_CFG = {
     'step_num': MAIN_CFG['accumulation_num'],
     'max_norm': 1.0,}
 
+SCHEDULER_CFG = { # counted in acc steps (not micro steps)
+    'start_rate': 1e-4,
+    'end_rate': 1e-2,
+    'total_num': 4096,
+    'warmup_num': 128,}
+
 LOSS_CFG = {
     'embeds_rate': 1.0,
     'residuals_rate': 1.0,}
@@ -252,6 +258,7 @@ DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed_num'])
 print('[init] calculating the training metadata...')
 DATASET_DIM = len(DATASET_OBJ) // BATCH_CFG['batch_dim']
 BATCH_LEN = BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'] * GRADIENT_CFG['step_num']
+SCHEDULER_CFG['total_num'] = (2 * DATASET_DIM) // GRADIENT_CFG['step_num']
 
 # TOKENIZERS ###################################################################
 
@@ -310,12 +317,7 @@ OPTIMIZER_OBJ = torch.optim.AdamW(PREFIX_MOD.parameters(), **OPTIMIZER_CFG)
 SCALER_OBJ = torch.amp.GradScaler(**SCALER_CFG)
 
 print('[init] creating scheduler...')
-SCHEDULER_OBJ = mlable.schedulers.WaveLR(
-    optimizer_obj=OPTIMIZER_OBJ,
-    start_rate=1e-4,
-    end_rate=1e-2,
-    total_num=(DATASET_DIM * TRAINING_CFG['epoch_num']) // GRADIENT_CFG['step_num'],
-    warmup_num=min(128, DATASET_DIM // GRADIENT_CFG['step_num']))
+SCHEDULER_OBJ = mlable.schedulers.WaveLR(optimizer_obj=OPTIMIZER_OBJ, **SCHEDULER_CFG)
 
 print('[init] enabling mixed precision...')
 MIXED_CTX = (
