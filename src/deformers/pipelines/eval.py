@@ -11,12 +11,10 @@ Assumptions:
 """
 
 import math
-import os
 
 import torch
 import torch.nn.functional
 
-import deformers.layers.prefix
 import deformers.pipelines.patch
 
 # METRICS ######################################################################
@@ -47,3 +45,31 @@ def topk_rate(
     __s = student_arr.topk(k_num, dim=-1).indices
     # reduced to a Python float
     return (__t == __s).all(dim=-1).float().mean()
+
+# PROBE ########################################################################
+
+def indices_probe(
+    vocab_dim: int,
+    batch_dim: int,
+    sequence_dim: int
+) -> list[list[int]]:
+    # first indices / tokens of the vocabulary
+    __ids = torch.arange(batch_dim * seq_dim, dtype=torch.long) % vocab_dim
+    # (B, T) integers
+    return __ids.reshape(batch_dim, seq_dim).tolist()
+
+def bytes_probe(
+    indices_arr: list[list[int]],
+    patch_dim: int,
+    byte_tok: object,
+    text_tok: object,
+) -> list[list[list[int]]]:
+    # extract the {ID => token} mapping
+    __mapping = {v: k for (k, v) in text_tok.get_vocab().items()}
+    # convert the IDs into tokens
+    __tokens = [[__mapping[__i] for __i in __r] for __r in indices_arr]
+    # (B, T, G) bytes
+    return deformers.pipelines.patch.encode_into_bytes(
+        tokens_arr=__tokens,
+        patch_dim=patch_dim,
+        tokenizer_obj=byte_tok)
