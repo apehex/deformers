@@ -107,7 +107,7 @@ class CompositeBytePrefix(torch.nn.Module):
         else:
             assert len(__shape) == 2, SHAPE_MSG.format(2, __shape, __group)
         # lazy init: build sub-layers on first call, placed on input device
-        self.build(shape=__shape, device=inputs.device, dtype=inputs.dtype)
+        self.build(shape=__shape, device=inputs.device, dtype=None)
         # (B, T, G) => (B, T, H) or (B, T*G) => (B, T, H)
         return self._layers(inputs.to(dtype=torch.long))
 
