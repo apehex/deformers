@@ -29,6 +29,7 @@ Monitoring (per optimizer step):
 """
 
 import contextlib
+import functools
 import os
 import time
 
@@ -284,6 +285,40 @@ __count = torch.zeros(size=(VOCAB_LEN,), dtype=torch.long, device='cpu')
 
 OPTIMIZER_OBJ.zero_grad()
 
+# UTILITIES ####################################################################
+
+print('[init] creating specialized utilities...')
+
+preprocess = functools.partial(
+    deformers.pipelines.prefix.tensors_from_strings,
+    text_tok=TEXT_TOK,
+    byte_tok=BYTE_TOK,
+    dtype_obj=torch.long,
+    sequence_dim=BATCH_CFG['sequence_dim'],
+    patch_dim=BATCH_CFG['patch_dim'],
+    device_str=MAIN_CFG['device_str'])
+
+score = functools.partial(
+    deformers.pipelines.prefix.compute_losses,
+    step_num=GRADIENT_CFG['step_num'],
+    **LOSS_CFG)
+
+def embed(
+    indices_arr: torch.Tensor,
+    model_obj: object=SOURCE_MOD,
+) -> torch.Tensor:
+    return model_obj.model.embed_tokens(indices_arr)
+
+def forward(
+    embeds_arr: torch.Tensor,
+    mask_arr: torch.Tensor,
+    model_obj: object=SOURCE_MOD,
+) -> torch.Tensor:
+    return model_obj.model(
+        inputs_embeds=embeds_arr,
+        attention_mask=mask_arr,
+        use_cache=False).last_hidden_state
+
 # TRAINING #####################################################################
 
 for __epoch in range(TRAINING_CFG['epoch_num']):
@@ -306,41 +341,26 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __texts = __batch['text']
 
         # mask (B, T), tokens (B, T), bytes (B, T, G) integers
-        __mask_arr, __tokens_arr, __bytes_arr = deformers.pipelines.prefix.tensors_from_strings(
-            text_arr=__texts,
-            text_tok=TEXT_TOK,
-            byte_tok=BYTE_TOK,
-            dtype_obj=torch.long,
-            sequence_dim=BATCH_CFG['sequence_dim'],
-            patch_dim=BATCH_CFG['patch_dim'],
-            device_str=MAIN_CFG['device_str'],
-            dtype_obj=torch.long)
+        __mask_arr, __indices_arr, __bytes_arr = preprocess(text_arr=__texts)
 
-        # teacher forward: get original embeddings and hidden states (no grad)
-        with torch.no_grad():
-            __teacher_0_arr = SOURCE_MOD.model.embed_tokens(__tokens_arr)
-            __teacher_k_arr = SOURCE_MOD.model(
-                inputs_embeds=__teacher_0_arr,
-                attention_mask=__mask_arr,
-                use_cache=False).last_hidden_state
-
-        # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
+        # compute in bfloat16
         with MIXED_CTX:
+            # teacher forward: get original embeddings and hidden states (no grad)
+            with torch.no_grad():
+                __teacher_0_arr = embed(indices_arr=__indices_arr)
+                __teacher_k_arr = forward(embeds_arr=__teacher_0_arr, mask_arr=__mask_arr)
+
+            # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
             __student_0_arr = PREFIX_MOD(__bytes_arr).to(dtype=__teacher_0_arr.dtype)
-            __student_k_arr = SOURCE_MOD.model(
-                inputs_embeds=__student_0_arr,
-                attention_mask=__mask_arr,
-                use_cache=False).last_hidden_state
+            __student_k_arr = forward(embeds_arr=__student_0_arr, mask_arr=__mask_arr)
 
             # combination of the MSE at depth 0 and k
-            __losses = deformers.pipelines.prefix.compute_losses(
+            __losses = score(
                 teacher_0_arr=__teacher_0_arr,
                 student_0_arr=__student_0_arr,
                 teacher_k_arr=__teacher_k_arr,
                 student_k_arr=__student_k_arr,
-                mask_arr=__mask_arr,
-                step_num=GRADIENT_CFG['step_num'],
-                **LOSS_CFG)
+                mask_arr=__mask_arr)
 
         # perform the backward propagation of the loss
         SCALER_OBJ.scale(__losses[-1]).backward()
@@ -352,7 +372,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __state['train/step/current'] = __step + 1
 
         # track token stats
-        __count += torch.bincount(__tokens_arr.flatten().cpu(), minlength=VOCAB_LEN)
+        __count += torch.bincount(__indices_arr.flatten().cpu(), minlength=VOCAB_LEN)
         __state['train/vocab/seen'] = float((__count > 0).sum().item()) / VOCAB_LEN
         __state['train/vocab/max'] = float(__count.max().item()) / float(__count.sum().item())
 
