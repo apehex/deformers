@@ -186,18 +186,6 @@ CHECKPOINT_CFG = {
     'step_num': MAIN_CFG['checkpoint_num'],
     'save_path': os.path.abspath('checkpoints/prefix.pt'),}
 
-# LOGGING UTILS ################################################################
-
-def format_state(state: dict) -> dict:
-    """Group and format the state variables to export them."""
-    return {
-        'epoch': f"({state['train/epoch/current']}/{state['train/epoch/total']})",
-        'step': f"({state['train/step/current']}/{state['train/step/total']})",
-        'loss': f"(ema: {state['train/loss/ema']:.6f} total: {state['train/loss/total']:.6f} mse(0: {state['train/loss/mse/0']:.6f} k: {state['train/loss/mse/k']:.6f}) kl-div(0: {state['train/loss/kldiv/0']:.6f} k: {state['train/loss/kldiv/k']:.6f}))",
-        'gradient': f"(rate: {state['train/gradient/rate']:.2e} norm: {state['train/gradient/norm']:.4f})",
-        'iter': f"(time: {state['train/iter/time'] * 1000.0:.0f} tok/s: {state['train/iter/tps']:.0f})",
-        'vocab': f"(seen: {state['train/vocab/seen'] * 100.0:.1f}% max: {state['train/vocab/max'] * 100.0:.1f}%)",}
-
 # DATASET ######################################################################
 
 print('[init] downloading the dataset...')
@@ -332,6 +320,16 @@ def forward(
         inputs_embeds=embeds_arr,
         attention_mask=mask_arr,
         use_cache=False).last_hidden_state
+
+def format_state(state: dict) -> dict:
+    """Group and format the state variables to export them."""
+    return {
+        'epoch': f"({state['train/epoch/current']}/{state['train/epoch/total']})",
+        'step': f"({state['train/step/current']}/{state['train/step/total']})",
+        'loss': f"(ema: {state['train/loss/ema']:.6f} total: {state['train/loss/total']:.6f} mse(0: {state['train/loss/mse/0']:.6f} k: {state['train/loss/mse/k']:.6f}) kl-div(0: {state['train/loss/kldiv/0']:.6f} k: {state['train/loss/kldiv/k']:.6f}))",
+        'gradient': f"(rate: {state['train/gradient/rate']:.2e} norm: {state['train/gradient/norm']:.4f})",
+        'iter': f"(time: {state['train/iter/time'] * 1000.0:.0f} tok/s: {state['train/iter/tps']:.0f})",
+        'vocab': f"(seen: {state['train/vocab/seen'] * 100.0:.1f}% max: {state['train/vocab/max'] * 100.0:.1f}%)",}
 
 # TESTING ######################################################################
 
