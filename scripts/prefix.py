@@ -78,15 +78,26 @@ MAIN_CFG = {
 # DATA CONFIG ##################################################################
 
 DATASET_CFG = {
-    'path': 'wikimedia/wikipedia',
-    'name': '20231101.en',
-    'split': 'train[:10%]',
-    'streaming': False,}
+    'wikipedia': {
+        'path': 'wikimedia/wikipedia',
+        'name': '20231101.en',
+        'split': 'train[:10%]',
+        'streaming': False,},
+    'random': {
+        'dataset_len': 1024 * MAIN_CFG['batch_dim'],
+        'sequence_dim': MAIN_CFG['sequence_dim'],
+        'vocab_dim': 248320,
+        'seed_num': MAIN_CFG['seed_num'],}}
 
 BATCH_CFG = {
     'batch_dim': MAIN_CFG['batch_dim'],
     'sequence_dim': MAIN_CFG['sequence_dim'],
     'patch_dim': MAIN_CFG['patch_dim'],}
+
+PREPROC_CFG = {
+    'truncation': 'longest_first',
+    'padding': 'max_length',
+    'max_length': BATCH_CFG['sequence_dim'],}
 
 # PREPROCESSING CONFIG #########################################################
 
@@ -187,19 +198,6 @@ CHECKPOINT_CFG = {
     'step_num': MAIN_CFG['checkpoint_num'],
     'save_path': os.path.abspath('checkpoints/prefix.pt'),}
 
-# DATASET ######################################################################
-
-print('[init] downloading the dataset...')
-DATASET_OBJ = datasets.load_dataset(**DATASET_CFG)
-
-print('[init] preprocessing the dataset...')
-DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed_num'])
-
-print('[init] calculating the training metadata...')
-DATASET_DIM = len(DATASET_OBJ) // BATCH_CFG['batch_dim']
-BATCH_LEN = BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'] * GRADIENT_CFG['step_num']
-SCHEDULER_CFG['total_num'] = (2 * DATASET_DIM) // GRADIENT_CFG['step_num']
-
 # TOKENIZERS ###################################################################
 
 print('[init] loading the tokenizers...')
@@ -209,6 +207,29 @@ BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(**BYTE_CFG)
 print('[init] calculating the tokenizer metadata...')
 VOCAB_ARR = {__v: __k for (__k, __v) in TEXT_TOK.get_vocab().items()}
 VOCAB_LEN = len(VOCAB_ARR)
+DATASET_CFG['random']['vocab_dim'] = VOCAB_LEN
+
+# DATASET ######################################################################
+
+def preprocess(sample: dict) -> dict:
+    return {'indices': TEXT_TOK(sample['text'], **PREPROC_CFG)['input_ids']}
+
+print('[init] downloading the main dataset...')
+DATASET['wikipedia'] = datasets.load_dataset(**DATASET_CFG['wikipedia']).select_columns(['text'])
+
+print('[init] preprocessing the main dataset...')
+DATASET['wikipedia'] = DATASET['wikipedia'].map(preprocess, batched=True, remove_columns=['text'])
+
+print('[init] building a random dataset...')
+DATASET['random'] = deformers.datasets.random.build_uniform_dataset(**DATASET_CFG['random'])
+
+print('[init] concatenating the two datasets...')
+DATASET_OBJ = datasets.concatenate_datasets([DATASET['random'], DATASET['wikipedia']])
+
+print('[init] calculating the training metadata...')
+DATASET_DIM = len(DATASET_OBJ) // BATCH_CFG['batch_dim']
+BATCH_LEN = BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'] * GRADIENT_CFG['step_num']
+SCHEDULER_CFG['total_num'] = (2 * DATASET_DIM) // GRADIENT_CFG['step_num']
 
 # MODELS #######################################################################
 
@@ -281,17 +302,17 @@ OPTIMIZER_OBJ.zero_grad()
 
 print('[init] creating specialized utilities...')
 
-preprocess_s = functools.partial(
-    deformers.pipelines.prefix.tensors_from_strings,
-    text_tok=TEXT_TOK,
-    byte_tok=BYTE_TOK,
-    dtype_obj=torch.long,
-    sequence_dim=BATCH_CFG['sequence_dim'],
-    patch_dim=BATCH_CFG['patch_dim'],
-    device_str=MAIN_CFG['device_str'],
-    left_pad=True)
+# vectorize_strings = functools.partial(
+#     deformers.pipelines.prefix.tensors_from_strings,
+#     text_tok=TEXT_TOK,
+#     byte_tok=BYTE_TOK,
+#     dtype_obj=torch.long,
+#     sequence_dim=BATCH_CFG['sequence_dim'],
+#     patch_dim=BATCH_CFG['patch_dim'],
+#     device_str=MAIN_CFG['device_str'],
+#     left_pad=True)
 
-preprocess_i = functools.partial(
+vectorize = functools.partial(
     deformers.pipelines.prefix.tensors_from_indices,
     text_tok=TEXT_TOK,
     byte_tok=BYTE_TOK,
@@ -341,7 +362,7 @@ PROBE_I = deformers.pipelines.eval.indices_probe(
     sequence_dim=BATCH_CFG['sequence_dim'])
 
 print('[init] encoding the testing batch...')
-PROBE_M, PROBE_I, PROBE_B = preprocess_i(PROBE_I)
+PROBE_M, PROBE_I, PROBE_B = vectorize(PROBE_I)
 
 print('[init] embedding the testing batch...')
 with MIXED_CTX:
@@ -372,11 +393,8 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
     __state = deformers.pipelines.monitor.reset_state(state=__state, update=STATE_CFG)
 
     for __batch in __pbar:
-        # list of plain strings (B,)
-        __texts = __batch['text']
-
         # mask (B, T), tokens (B, T), bytes (B, T, G) integers
-        __mask_arr, __indices_arr, __bytes_arr = preprocess_s(text_arr=__texts)
+        __mask_arr, __indices_arr, __bytes_arr = vectorize(__batch['indices'])
 
         # compute in bfloat16
         with MIXED_CTX:
