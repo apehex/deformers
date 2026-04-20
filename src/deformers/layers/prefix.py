@@ -67,31 +67,34 @@ class CompositeBytePrefix(torch.nn.Module):
             __embed_dim = __group_dim * self._config['embed_dim']
             # projection target dimension: defaults to merged embed dim
             __latent_dim = __embed_dim if (self._config['latent_dim'] < 1) else self._config['latent_dim']
-            # build the sequential pipeline
-            self._layers = torch.nn.Sequential(
-                # (B, T, G) => (B, T, G*E)
-                mlable.layers.embedding.CompositeEmbedding(
-                    input_dim=self._config['vocab_dim'],
-                    output_dim=self._config['embed_dim'],
-                    group_dim=self._config['group_dim'],
-                    merge_axes=True),
-                # (B, T, G*E) => (B, T, G*E)
-                mlable.layers.normalization.GroupNorm(
-                    group_num=__group_dim,
-                    group_axis=-1,
-                    affine_opt=True),
-                # (B, T, G*E) => (B, T, G*E)
-                torch.nn.Linear(
-                    in_features=__embed_dim,
-                    out_features=__embed_dim,
-                    bias=True),
-                # (B, T, G*E) => (B, T, G*E)
-                torch.nn.SiLU(),
-                # (B, T, G*E) => (B, T, H)
-                torch.nn.Linear(
-                    in_features=__embed_dim,
-                    out_features=__latent_dim,
-                    bias=True))
+            # (B, T, G) => (B, T, G*E)
+            __embed = mlable.layers.embedding.CompositeEmbedding(
+                input_dim=self._config['vocab_dim'],
+                output_dim=self._config['embed_dim'],
+                group_dim=self._config['group_dim'],
+                merge_axes=True)
+            # (B, T, G*E) => (B, T, G*E)
+            __norm = mlable.layers.normalization.GroupNorm(
+                group_num=__group_dim,
+                group_axis=-1,
+                affine_opt=True)
+            # (B, T, G*E) => (B, T, G*E)
+            __expand = torch.nn.Linear(
+                in_features=__embed_dim,
+                out_features=__embed_dim,
+                bias=True)
+            # (B, T, G*E) => (B, T, G*E)
+            __silu = torch.nn.SiLU()
+            # (B, T, G*E) => (B, T, H)
+            __project = torch.nn.Linear(
+                in_features=__embed_dim,
+                out_features=__latent_dim,
+                bias=True)
+            # build the lazy layers
+            __embed.build(shape=shape, dtype=dtype, device=device)
+            __norm.build(shape=__embed.output_shape(shape), dtype=dtype, device=device)
+            # chain together the layers
+            self._layers = torch.nn.Sequential(__embed, __norm, __expand, __silu, __project)
             # move to the target device at build time (no-op if device is None)
             self._layers = self._layers.to(device=device, dtype=dtype)
             # register the build
