@@ -57,19 +57,3 @@ def indices_probe(
     __ids = torch.arange(batch_dim * seq_dim, dtype=torch.long) % vocab_dim
     # (B, T) integers
     return __ids.reshape(batch_dim, seq_dim).tolist()
-
-def bytes_probe(
-    indices_arr: list[list[int]],
-    patch_dim: int,
-    byte_tok: object,
-    text_tok: object,
-) -> list[list[list[int]]]:
-    # extract the {ID => token} mapping
-    __mapping = {v: k for (k, v) in text_tok.get_vocab().items()}
-    # convert the IDs into tokens
-    __tokens = [[__mapping[__i] for __i in __r] for __r in indices_arr]
-    # (B, T, G) bytes
-    return deformers.pipelines.patch.encode_into_bytes(
-        tokens_arr=__tokens,
-        patch_dim=patch_dim,
-        tokenizer_obj=byte_tok)
