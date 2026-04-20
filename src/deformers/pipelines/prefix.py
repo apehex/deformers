@@ -3,6 +3,7 @@ import torch
 import mlable.losses
 
 import deformers.pipelines.patch
+import deformers.tokenizers.generic
 
 # PREPROCESSING ################################################################
 
@@ -45,19 +46,19 @@ def tensors_from_indices(
     patch_dim: int,
     dtype_obj: object=torch.long,
     device_str: str='cpu',
+    padding_str: str='',
 ) -> tuple[torch.Tensor]:
     # common casting arguments
     __args = {'dtype': dtype_obj, 'device': device_str,}
-    # mapping {id => token} over the vocabulary
-    __padding = text_tok.pad_token
-    __mapping = {__i: ('' if __t == __padding else __t) for (__t, __i) in text_tok.get_vocab().items()}
     # input_ids (B, T) and attention_mask (B, T)
     __inputs = text_tok.pad(
         {'input_ids': indices_arr},
         max_length=sequence_dim,
         padding='max_length')
     # translaste the IDs into tokens
-    __tokens = [[__mapping[__i] for __i in __r] for __r in __inputs['input_ids']]
+    __tokens = [
+        [text_tok.decode(__i).replace(text_tok.pad_token, padding_str) for __i in __r]
+        for __r in __inputs['input_ids']]
     # byte patches (B, T, G)
     __encoded = deformers.pipelines.patch.encode_into_bytes(
         tokens_arr=__tokens,
