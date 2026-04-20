@@ -58,7 +58,7 @@ import deformers.tokenizers.byte
 # COMMON CONFIG ################################################################
 
 MAIN_CFG = {
-    'resume_opt': False,
+    'resume_opt': True,
     'model_str': 'qwen/qwen3.5-9b',
     'device_str': 'cuda' if torch.cuda.is_available() else 'cpu',
     'dtype_obj': torch.bfloat16,
@@ -421,7 +421,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         # optimizer step after gradient accumulation
         if (__step + 1) % GRADIENT_CFG['step_num'] == 0:
             # track the loss EMA, default to the current loss for the first 128 steps
-            __state['train/loss/ema'] = mlable.utils.ema(average=__state['train/loss/ema'], current=__state['train/loss/total'], factor=0.99 * float(__step > 128))
+            __state['train/loss/ema'] = mlable.utils.ema(average=__state['train/loss/ema'], current=__state['train/loss/total'], factor=0.99 * float(__step > 256))
 
             # gradient clipping; unscale first to get true grad norm
             SCALER_OBJ.unscale_(OPTIMIZER_OBJ)
