@@ -58,7 +58,7 @@ import deformers.tokenizers.byte
 # COMMON CONFIG ################################################################
 
 MAIN_CFG = {
-    'resume_opt': True,
+    'resume_opt': False,
     'model_str': 'qwen/qwen3.5-9b',
     'device_str': 'cuda' if torch.cuda.is_available() else 'cpu',
     'dtype_obj': torch.bfloat16,
@@ -72,7 +72,8 @@ MAIN_CFG = {
     'accumulation_num': 4,
     'logging_num': 32,
     'testing_num': 128,
-    'checkpoint_num': 128,}
+    'checkpoint_num': 128,
+    'learning_rate': 5e-5,}
 
 # DATA CONFIG ##################################################################
 
@@ -127,7 +128,7 @@ TRAINING_CFG = {
     'epoch_num': MAIN_CFG['epoch_num'],}
 
 OPTIMIZER_CFG = {
-    'lr': 1e-4,
+    'lr': MAIN_CFG['learning_rate'],
     'betas': (0.9, 0.999),
     'weight_decay': 0.01,}
 
@@ -140,15 +141,15 @@ GRADIENT_CFG = {
 
 SCHEDULER_CFG = { # counted in acc steps (not micro steps)
     'start_rate': 1e-4,
-    'end_rate': 1e-2,
+    'end_rate': 5e-2,
     'total_num': 4096,
     'warmup_num': 128,}
 
 LOSS_CFG = {
     'mse_0_rate': 1.0,
     'mse_k_rate': 1.0,
-    'kld_0_rate': 1.0,
-    'kld_k_rate': 1.0,}
+    'kld_0_rate': 0.0,
+    'kld_k_rate': 0.0,}
 
 # TESTING CONFIG ###############################################################
 
