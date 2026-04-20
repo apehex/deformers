@@ -215,16 +215,16 @@ def preprocess(sample: dict) -> dict:
     return {'indices': TEXT_TOK(sample['text'], **PREPROC_CFG)['input_ids']}
 
 print('[init] downloading the main dataset...')
-DATASET['wikipedia'] = datasets.load_dataset(**DATASET_CFG['wikipedia']).select_columns(['text'])
+DATASETS = {'wikipedia': datasets.load_dataset(**DATASET_CFG['wikipedia']).select_columns(['text']),}
 
 print('[init] preprocessing the main dataset...')
-DATASET['wikipedia'] = DATASET['wikipedia'].map(preprocess, batched=True, remove_columns=['text'])
+DATASETS['wikipedia'] = DATASETS['wikipedia'].map(preprocess, batched=True, remove_columns=['text'])
 
 print('[init] building a random dataset...')
-DATASET['random'] = deformers.datasets.random.build_uniform_dataset(**DATASET_CFG['random'])
+DATASETS['random'] = deformers.datasets.random.build_uniform_dataset(**DATASET_CFG['random'])
 
 print('[init] concatenating the two datasets...')
-DATASET_OBJ = datasets.concatenate_datasets([DATASET['random'], DATASET['wikipedia']])
+DATASET_OBJ = datasets.concatenate_datasets([DATASETS['random'], DATASETS['wikipedia']])
 
 print('[init] calculating the training metadata...')
 DATASET_DIM = len(DATASET_OBJ) // BATCH_CFG['batch_dim']
