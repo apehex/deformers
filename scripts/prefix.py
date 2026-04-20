@@ -182,7 +182,7 @@ LOGGING_CFG = {
     'step_num': MAIN_CFG['logging_num'],
     'log_path': os.path.abspath('logs/prefix.log'),}
 
-OUTPUT_CFG = {
+CHECKPOINT_CFG = {
     'step_num': MAIN_CFG['checkpoint_num'],
     'save_path': os.path.abspath('checkpoints/prefix.pt'),}
 
@@ -226,7 +226,7 @@ VOCAB_LEN = len(VOCAB_ARR)
 print('[init] creating the output directories...')
 os.makedirs(DOWNLOAD_CFG['local_dir'], exist_ok=True)
 os.makedirs(os.path.dirname(LOGGING_CFG['log_path']), exist_ok=True)
-os.makedirs(os.path.dirname(OUTPUT_CFG['save_path']), exist_ok=True)
+os.makedirs(os.path.dirname(CHECKPOINT_CFG['save_path']), exist_ok=True)
 
 print('[init] downloading the teacher...')
 huggingface_hub.snapshot_download(**DOWNLOAD_CFG)
@@ -246,9 +246,9 @@ mlable.models.freeze(SOURCE_MOD)
 
 print('[init] creating the student...')
 PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
-if MAIN_CFG['resume_opt'] and os.path.exists(OUTPUT_CFG['save_path']):
+if MAIN_CFG['resume_opt'] and os.path.exists(CHECKPOINT_CFG['save_path']):
     PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix.load_checkpoint(
-        path=OUTPUT_CFG['save_path'],
+        path=CHECKPOINT_CFG['save_path'],
         shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
         device=MAIN_CFG['device_str'])
 
@@ -478,9 +478,9 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
                     print(f"[test] loss(total: {__metrics[-1]:.6f} mse(0: {__metrics[0]:.6f} k: {__metrics[1]:.6f}) kl-div(0: {__metrics[2]:.6f} k: {__metrics[3]:.6f}))")
 
         # write to disk sporadically
-        if (__step + 1) % OUTPUT_CFG['step_num'] == 0:
+        if (__step + 1) % CHECKPOINT_CFG['step_num'] == 0:
             # save the weights and config
-            PREFIX_MOD.save_checkpoint(path=OUTPUT_CFG['save_path'])
+            PREFIX_MOD.save_checkpoint(path=CHECKPOINT_CFG['save_path'])
 
         # reset only after the gradient accumulation
         if (__step + 1) % GRADIENT_CFG['step_num'] == 0:
@@ -499,5 +499,5 @@ print('[post] closing the log streams...')
 LOG_TB.close()
 LOG_FILE.close()
 
-print(f'[post] saving prefix to {OUTPUT_CFG["save_path"]}...')
-PREFIX_MOD.save_checkpoint(path=OUTPUT_CFG['save_path'])
+print(f'[post] saving prefix to {CHECKPOINT_CFG["save_path"]}...')
+PREFIX_MOD.save_checkpoint(path=CHECKPOINT_CFG['save_path'])
