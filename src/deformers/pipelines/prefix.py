@@ -3,7 +3,6 @@ import torch
 import mlable.losses
 
 import deformers.pipelines.patch
-import deformers.tokenizers.generic
 
 # PREPROCESSING ################################################################
 
