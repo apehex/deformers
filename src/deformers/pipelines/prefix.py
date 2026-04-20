@@ -15,6 +15,7 @@ def tensors_from_strings(
     patch_dim: int,
     dtype_obj: object=torch.long,
     device_str: str='cpu',
+    left_pad: bool=True,
 ) -> tuple[torch.Tensor]:
     # common casting arguments
     __args = {'dtype': dtype_obj, 'device': device_str,}
@@ -30,6 +31,7 @@ def tensors_from_strings(
         texts_arr=text_arr,
         offsets_arr=__inputs['offset_mapping'],
         patch_dim=patch_dim,
+        left_pad=left_pad,
         tokenizer_obj=byte_tok)
     # format as tensors
     __mask_arr = torch.tensor(__inputs['attention_mask'], **__args)
@@ -47,6 +49,7 @@ def tensors_from_indices(
     dtype_obj: object=torch.long,
     device_str: str='cpu',
     padding_str: str='',
+    left_pad: bool=True,
 ) -> tuple[torch.Tensor]:
     # common casting arguments
     __args = {'dtype': dtype_obj, 'device': device_str,}
@@ -63,6 +66,7 @@ def tensors_from_indices(
     __encoded = deformers.pipelines.patch.encode_into_bytes(
         tokens_arr=__tokens,
         patch_dim=patch_dim,
+        left_pad=left_pad,
         tokenizer_obj=byte_tok)
     # format as tensors
     __mask_arr = torch.tensor(__inputs['attention_mask'], **__args)
