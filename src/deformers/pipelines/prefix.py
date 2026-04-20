@@ -59,7 +59,7 @@ def tensors_from_indices(
     # translaste the IDs into tokens
     __tokens = [[__mapping[__i] for __i in __r] for __r in __inputs['input_ids']]
     # byte patches (B, T, G)
-    __encoded = deformers.pipelines.patch.tokenize_into_bytes(
+    __encoded = deformers.pipelines.patch.encode_into_bytes(
         tokens_arr=__tokens,
         patch_dim=patch_dim,
         tokenizer_obj=byte_tok)
@@ -83,7 +83,7 @@ def compute_losses(
     mse_k_rate: float=1.0,
     kld_0_rate: float=0.0,
     kld_k_rate: float=0.0,
-) -> tuple:
+) -> tuple[torch.Tensor]:
     """Compute the combined embedding and hidden-state MSE loss."""
     assert any((__r > 0.0) for __r in [mse_0_rate, mse_k_rate, kld_0_rate, kld_k_rate])
     # default to 0 when a factor is null
