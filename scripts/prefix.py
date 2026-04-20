@@ -51,6 +51,7 @@ import deformers.models.generic
 import deformers.pipelines.eval
 import deformers.pipelines.monitor
 import deformers.pipelines.patch
+import deformers.pipelines.prefix
 import deformers.tokenizers.byte
 
 # COMMON CONFIG ################################################################
@@ -142,8 +143,10 @@ SCHEDULER_CFG = { # counted in acc steps (not micro steps)
     'warmup_num': 128,}
 
 LOSS_CFG = {
-    'embeds_rate': 1.0,
-    'residuals_rate': 1.0,}
+    'mse_0_rate': 1.0,
+    'mse_k_rate': 1.0,
+    'kld_0_rate': 1.0,
+    'kld_k_rate': 1.0,}
 
 # OUTPUT CONFIG ################################################################
 
@@ -159,9 +162,10 @@ STATE_CFG = {
     'train/gradient/norm': lambda __x: 0.0,
     'train/loss/ema': lambda __x: __x, # keep the current loss EMA
     'train/loss/total': lambda __x: 0.0,
-    'train/loss/embed': lambda __x: 0.0,
-    'train/loss/hidden': lambda __x: 0.0,
-    'train/loss/kldiv': lambda __x: 0.0,
+    'train/loss/mse/0': lambda __x: 0.0,
+    'train/loss/mse/k': lambda __x: 0.0,
+    'train/loss/kldiv/0': lambda __x: 0.0,
+    'train/loss/kldiv/k': lambda __x: 0.0,
     'train/vocab/seen': lambda __x: 0.0,
     'train/vocab/max': lambda __x: 0.0,
     'gpu/memory/allocated': lambda __x: 0.0,
@@ -175,66 +179,6 @@ OUTPUT_CFG = {
     'step_num': MAIN_CFG['checkpoint_num'],
     'save_path': os.path.abspath('checkpoints/prefix.pt'),}
 
-# PREPROC UTILS ################################################################
-
-def compute_tensors(
-    text_arr: list[str],
-    text_tok: object,
-    byte_tok: object,
-    dtype_obj: object=torch.long,
-    sequence_dim: int=BATCH_CFG['sequence_dim'],
-    patch_dim: int=BATCH_CFG['patch_dim'],
-    device_str: str=MAIN_CFG['device_str']
-) -> tuple[torch.Tensor]:
-    # common casting arguments
-    __args = {'dtype': dtype_obj, 'device': device_str,}
-    # input_ids (B, T) and attention_mask (B, T)
-    __inputs = text_tok(
-        text_arr,
-        return_offsets_mapping=True,
-        max_length=sequence_dim,
-        truncation='longest_first',
-        padding='max_length')
-    # byte patches (B, T, G)
-    __encoded = deformers.pipelines.patch.tokenize_into_bytes(
-        texts_arr=text_arr,
-        offsets_arr=__inputs['offset_mapping'],
-        patch_dim=patch_dim,
-        tokenizer_obj=byte_tok)
-    # format as tensors
-    __tokens_arr = torch.tensor(__inputs['input_ids'], **__args)
-    __mask_arr = torch.tensor(__inputs['attention_mask'], **__args)
-    __bytes_arr = torch.tensor(__encoded, **__args)
-    # (B, T), (B, T), (B, T, G)
-    return __mask_arr, __tokens_arr, __bytes_arr
-
-# LOSS UTILS ###################################################################
-
-def compute_losses(
-    student_embeds: torch.Tensor,
-    teacher_embeds: torch.Tensor,
-    student_residuals: torch.Tensor,
-    teacher_residuals: torch.Tensor,
-    embeds_rate: float=LOSS_CFG['embeds_rate'],
-    residuals_rate: float=LOSS_CFG['residuals_rate'],
-    accumulation_num: int=GRADIENT_CFG['step_num'],
-) -> tuple:
-    """Compute the combined embedding and hidden-state MSE loss."""
-    # MSE on the embeddings
-    __loss_embeds = torch.nn.functional.mse_loss(
-        student_embeds.float(),
-        teacher_embeds.float())
-    # MSE on the hidden states at depth k
-    __loss_residuals = torch.nn.functional.mse_loss(
-        student_residuals.float(),
-        teacher_residuals.float())
-    # combine the losses
-    __loss = residuals_rate * __loss_residuals + embeds_rate * __loss_embeds
-    # average over the gradient accumulation steps
-    __factor = float(max(1, accumulation_num))
-    # return the components for monitoring
-    return (__loss_embeds.detach() / __factor, __loss_residuals.detach() / __factor, __loss / __factor)
-
 # LOGGING UTILS ################################################################
 
 def format_state(state: dict) -> dict:
@@ -242,7 +186,7 @@ def format_state(state: dict) -> dict:
     return {
         'epoch': f"({state['train/epoch/current']}/{state['train/epoch/total']})",
         'step': f"({state['train/step/current']}/{state['train/step/total']})",
-        'loss': f"(ema: {state['train/loss/ema']:.6f} total: {state['train/loss/total']:.6f} embed: {state['train/loss/embed']:.6f} hidden: {state['train/loss/hidden']:.6f} kl: {state['train/loss/kldiv']:.6f})",
+        'loss': f"(ema: {state['train/loss/ema']:.6f} total: {state['train/loss/total']:.6f} mse(0: {state['train/loss/mse/0']:.6f} k: {state['train/loss/mse/k']:.6f}) kl-div(0: {state['train/loss/kldiv/0']:.6f} k: {state['train/loss/kldiv/k']:.6f}))",
         'gradient': f"(rate: {state['train/gradient/rate']:.2e} norm: {state['train/gradient/norm']:.4f})",
         'iter': f"(time: {state['train/iter/time'] * 1000.0:.0f} tok/s: {state['train/iter/tps']:.0f})",
         'vocab': f"(seen: {state['train/vocab/seen'] * 100.0:.1f}% max: {state['train/vocab/max'] * 100.0:.1f}%)",}
@@ -362,40 +306,41 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __texts = __batch['text']
 
         # mask (B, T), tokens (B, T), bytes (B, T, G) integers
-        __mask_arr, __tokens_arr, __bytes_arr = compute_tensors(
+        __mask_arr, __tokens_arr, __bytes_arr = deformers.pipelines.prefix.tensors_from_strings(
             text_arr=__texts,
             text_tok=TEXT_TOK,
             byte_tok=BYTE_TOK,
             dtype_obj=torch.long,
             sequence_dim=BATCH_CFG['sequence_dim'],
             patch_dim=BATCH_CFG['patch_dim'],
-            device_str=MAIN_CFG['device_str'])
+            device_str=MAIN_CFG['device_str'],
+            dtype_obj=torch.long)
 
         # teacher forward: get original embeddings and hidden states (no grad)
         with torch.no_grad():
-            __teacher_embeds = SOURCE_MOD.model.embed_tokens(__tokens_arr)
-            __teacher_residuals = SOURCE_MOD.model(
-                inputs_embeds=__teacher_embeds,
+            __teacher_0_arr = SOURCE_MOD.model.embed_tokens(__tokens_arr)
+            __teacher_k_arr = SOURCE_MOD.model(
+                inputs_embeds=__teacher_0_arr,
                 attention_mask=__mask_arr,
                 use_cache=False).last_hidden_state
 
         # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
         with MIXED_CTX:
-            __student_embeds = PREFIX_MOD(__bytes_arr).to(dtype=__teacher_embeds.dtype)
-            __student_residuals = SOURCE_MOD.model(
-                inputs_embeds=__student_embeds,
+            __student_0_arr = PREFIX_MOD(__bytes_arr).to(dtype=__teacher_0_arr.dtype)
+            __student_k_arr = SOURCE_MOD.model(
+                inputs_embeds=__student_0_arr,
                 attention_mask=__mask_arr,
                 use_cache=False).last_hidden_state
 
             # combination of the MSE at depth 0 and k
-            __losses = compute_losses(
-                teacher_embeds=__teacher_embeds,
-                student_embeds=__student_embeds,
-                teacher_residuals=__teacher_residuals,
-                student_residuals=__student_residuals,
-                embeds_rate=LOSS_CFG['embeds_rate'],
-                residuals_rate=LOSS_CFG['residuals_rate'],
-                accumulation_num=GRADIENT_CFG['step_num'])
+            __losses = deformers.pipelines.prefix.compute_losses(
+                teacher_0_arr=__teacher_0_arr,
+                student_0_arr=__student_0_arr,
+                teacher_k_arr=__teacher_k_arr,
+                student_k_arr=__student_k_arr,
+                mask_arr=__mask_arr,
+                step_num=GRADIENT_CFG['step_num'],
+                **LOSS_CFG)
 
         # perform the backward propagation of the loss
         SCALER_OBJ.scale(__losses[-1]).backward()
@@ -412,15 +357,14 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __state['train/vocab/max'] = float(__count.max().item()) / float(__count.sum().item())
 
         # the total loss is the average loss after N accumulation steps
-        __state['train/loss/embed'] += __losses[0].item()
-        __state['train/loss/hidden'] += __losses[1].item()
+        __state['train/loss/mse/0'] += __losses[0].item()
+        __state['train/loss/mse/k'] += __losses[1].item()
+        __state['train/loss/kldiv/0'] += __losses[2].item()
+        __state['train/loss/kldiv/k'] += __losses[3].item()
         __state['train/loss/total'] += __losses[-1].item()
 
         # optimizer step after gradient accumulation
         if (__step + 1) % GRADIENT_CFG['step_num'] == 0:
-            # compute KL from the hidden states (monitoring only)
-            __state['train/loss/kldiv'] = deformers.pipelines.eval.kl_divergence(__teacher_residuals, __student_residuals).item()
-
             # track the loss EMA, default to the current loss for the first 128 steps
             __state['train/loss/ema'] = mlable.utils.ema(average=__state['train/loss/ema'], current=__state['train/loss/total'], factor=0.99 * float(__step > 128))
 
