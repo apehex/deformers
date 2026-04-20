@@ -71,6 +71,7 @@ MAIN_CFG = {
     'epoch_num': 4,
     'accumulation_num': 4,
     'logging_num': 32,
+    'testing_num': 128,
     'checkpoint_num': 128,}
 
 # DATA CONFIG ##################################################################
@@ -148,6 +149,11 @@ LOSS_CFG = {
     'mse_k_rate': 1.0,
     'kld_0_rate': 1.0,
     'kld_k_rate': 1.0,}
+
+# TESTING CONFIG ###############################################################
+
+TESTING_CFG = {
+    'step_num': MAIN_CFG['testing_num'],}
 
 # OUTPUT CONFIG ################################################################
 
@@ -246,9 +252,6 @@ if MAIN_CFG['resume_opt'] and os.path.exists(OUTPUT_CFG['save_path']):
         shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
         device=MAIN_CFG['device_str'])
 
-print('[init] freeing the unused layers...')
-mlable.models.free_memory()
-
 print('[init] building the student...')
 PREFIX_MOD.build(
     shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
@@ -289,14 +292,25 @@ OPTIMIZER_OBJ.zero_grad()
 
 print('[init] creating specialized utilities...')
 
-preprocess = functools.partial(
+preprocess_s = functools.partial(
     deformers.pipelines.prefix.tensors_from_strings,
     text_tok=TEXT_TOK,
     byte_tok=BYTE_TOK,
     dtype_obj=torch.long,
     sequence_dim=BATCH_CFG['sequence_dim'],
     patch_dim=BATCH_CFG['patch_dim'],
-    device_str=MAIN_CFG['device_str'])
+    device_str=MAIN_CFG['device_str'],
+    left_pad=True)
+
+preprocess_i = functools.partial(
+    deformers.pipelines.prefix.tensors_from_indices,
+    text_tok=TEXT_TOK,
+    byte_tok=BYTE_TOK,
+    dtype_obj=torch.long,
+    sequence_dim=BATCH_CFG['sequence_dim'],
+    patch_dim=BATCH_CFG['patch_dim'],
+    device_str=MAIN_CFG['device_str'],
+    left_pad=True)
 
 score = functools.partial(
     deformers.pipelines.prefix.compute_losses,
@@ -318,6 +332,28 @@ def forward(
         inputs_embeds=embeds_arr,
         attention_mask=mask_arr,
         use_cache=False).last_hidden_state
+
+# TESTING ######################################################################
+
+print('[init] preparing a batch for testing...')
+PROBE_I = deformers.pipelines.eval.indices_probe(
+    vocab_dim=VOCAB_LEN,
+    batch_dim=BATCH_CFG['batch_dim'],
+    sequence_dim=BATCH_CFG['sequence_dim'])
+
+print('[init] encoding the testing batch...')
+PROBE_M, PROBE_I, PROBE_B = preprocess_i(PROBE_I)
+
+print('[init] embedding the testing batch...')
+with MIXED_CTX:
+    with torch.no_grad():
+        PROBE_0 = embed(indices_arr=PROBE_I)
+        PROBE_K = forward(embeds_arr=PROBE_0, mask_arr=PROBE_M)
+
+# CLEANUP ######################################################################
+
+print('[clean] freeing the unused memory...')
+mlable.models.free_memory()
 
 # TRAINING #####################################################################
 
@@ -341,7 +377,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __texts = __batch['text']
 
         # mask (B, T), tokens (B, T), bytes (B, T, G) integers
-        __mask_arr, __indices_arr, __bytes_arr = preprocess(text_arr=__texts)
+        __mask_arr, __indices_arr, __bytes_arr = preprocess_s(text_arr=__texts)
 
         # compute in bfloat16
         with MIXED_CTX:
@@ -421,6 +457,25 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
 
             # write all the stats to the tensorboard summary
             deformers.pipelines.monitor.log_scalars(writer=LOG_TB, step=__step, scalars=__state)
+
+        # test the prefix on independent data
+        if (__step + 1) % TESTING_CFG['step_num'] == 0:
+            with MIXED_CTX:
+                with torch.no_grad():
+                    # embed the probe with the alternative prefix
+                    __probe_0_arr = PREFIX_MOD(PROBE_B).to(dtype=PROBE_0.dtype)
+                    __probe_k_arr = forward(embeds_arr=__probe_0_arr, mask_arr=PROBE_M)
+                    # combination of the MSE at depth 0 and k
+                    __metrics = score(
+                        teacher_0_arr=PROBE_0,
+                        student_0_arr=__probe_0_arr,
+                        teacher_k_arr=PROBE_K,
+                        student_k_arr=__probe_k_arr,
+                        mask_arr=PROBE_M)
+                    # rescale and format all the metrics
+                    __metrics = [float(GRADIENT_CFG['step_num']) * float(__m) for __m in __metrics]
+                    # log the testing results
+                    print(f"[test] loss(total: {__metrics[-1]:.6f} mse(0: {__metrics[0]:.6f} k: {__metrics[1]:.6f}) kl-div(0: {__metrics[2]:.6f} k: {__metrics[3]:.6f}))")
 
         # write to disk sporadically
         if (__step + 1) % OUTPUT_CFG['step_num'] == 0:
