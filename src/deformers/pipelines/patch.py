@@ -16,6 +16,7 @@ def partition_into_tokens(
 def encode_into_bytes(
     tokens_arr: list[list[str]],
     patch_dim: int=32, # enough for 97.4% of the tokens of qwen3.5
+    left_pad: bool=True,
     tokenizer_obj: object=deformers.tokenizers.byte.ByteTokenizer(encoding='utf-8'),
 ) -> list[list[list[int]]]:
     """Encode each token substring as a fixed-length sequence of byte ids."""
@@ -25,13 +26,14 @@ def encode_into_bytes(
             max_length=patch_dim,
             truncation='longest_first',
             padding='max_length',
-            padding_side='right')['input_ids']
+            padding_side='left' if left_pad else 'right')['input_ids']
         for __s in tokens_arr]
 
 def tokenize_into_bytes(
     texts_arr: list[str],
     offsets_arr: list[list[tuple[int, int]]],
     patch_dim: int=32,
+    left_pad: bool=True,
     tokenizer_obj: object=deformers.tokenizers.byte.ByteTokenizer(encoding='utf-8'),
 ) -> list[list[list[int]]]:
     """Produce aligned (B, T, G) tensors from a batch of raw text strings."""
@@ -43,6 +45,7 @@ def tokenize_into_bytes(
     return encode_into_bytes(
         tokens_arr=__tokens,
         patch_dim=patch_dim,
+        left_pad=left_pad,
         tokenizer_obj=tokenizer_obj)
 
 # POSTPROCESSING ###############################################################
