@@ -54,6 +54,6 @@ def indices_probe(
     sequence_dim: int
 ) -> list[list[int]]:
     # first indices / tokens of the vocabulary
-    __ids = torch.arange(batch_dim * seq_dim, dtype=torch.long) % vocab_dim
+    __ids = torch.arange(batch_dim * sequence_dim, dtype=torch.long) % vocab_dim
     # (B, T) integers
-    return __ids.reshape(batch_dim, seq_dim).tolist()
+    return __ids.reshape(batch_dim, sequence_dim).tolist()
