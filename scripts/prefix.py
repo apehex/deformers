@@ -518,3 +518,7 @@ LOG_FILE.close()
 
 print(f'[post] saving prefix to {CHECKPOINT_CFG["save_path"]}...')
 PREFIX_MOD.save_checkpoint(path=CHECKPOINT_CFG['save_path'])
+
+# DATAVIZ ######################################################################
+
+# !tensorboard --logdir=logs
