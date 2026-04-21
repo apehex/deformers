@@ -167,23 +167,28 @@ TESTING_CFG = {
 # OUTPUT CONFIG ################################################################
 
 STATE_CFG = {
-    'train/epoch/total': lambda __x: 0,
-    'train/epoch/current': lambda __x: 0,
-    'train/step/total': lambda __x: 0,
-    'train/step/current': lambda __x: 0,
-    'train/iter/start': lambda __x: time.monotonic(), # start of the gradient acc
-    'train/iter/time': lambda __x: 0.0,
-    'train/iter/tps': lambda __x: 0.0,
-    'train/gradient/rate': lambda __x: 0.0,
-    'train/gradient/norm': lambda __x: 0.0,
-    'train/loss/ema': lambda __x: __x, # keep the current loss EMA
-    'train/loss/total': lambda __x: 0.0,
-    'train/loss/mse/0': lambda __x: 0.0,
-    'train/loss/mse/k': lambda __x: 0.0,
-    'train/loss/kldiv/0': lambda __x: 0.0,
-    'train/loss/kldiv/k': lambda __x: 0.0,
-    'train/vocab/seen': lambda __x: 0.0,
-    'train/vocab/max': lambda __x: 0.0,
+    'switch/train': lambda __x: 1,
+    'switch/test': lambda __x: 0,
+    'switch/grad': lambda __x: 0,
+    'switch/log': lambda __x: 0,
+    'switch/save': lambda __x: 0,
+    'epoch/total': lambda __x: 0,
+    'epoch/current': lambda __x: 1,
+    'step/total': lambda __x: 0,
+    'step/current': lambda __x: 1,
+    'iter/start': lambda __x: time.monotonic(), # start of the gradient acc
+    'iter/time': lambda __x: 0.0,
+    'iter/tps': lambda __x: 0.0,
+    'gradient/rate': lambda __x: 0.0,
+    'gradient/norm': lambda __x: 0.0,
+    'loss/ema': lambda __x: __x, # keep the current loss EMA
+    'loss/total': lambda __x: 0.0,
+    'loss/mse/0': lambda __x: 0.0,
+    'loss/mse/k': lambda __x: 0.0,
+    'loss/kldiv/0': lambda __x: 0.0,
+    'loss/kldiv/k': lambda __x: 0.0,
+    'vocab/seen': lambda __x: 0.0,
+    'vocab/max': lambda __x: 0.0,
     'gpu/memory/allocated': lambda __x: 0.0,
     'gpu/memory/reserved': lambda __x: 0.0,}
 
@@ -343,12 +348,13 @@ def forward(
 def format_state(state: dict) -> dict:
     """Group and format the state variables to export them."""
     return {
-        'epoch': f"({state['train/epoch/current']}/{state['train/epoch/total']})",
-        'step': f"({state['train/step/current']}/{state['train/step/total']})",
-        'loss': f"(ema: {state['train/loss/ema']:.6f} total: {state['train/loss/total']:.6f} mse(0: {state['train/loss/mse/0']:.6f} k: {state['train/loss/mse/k']:.6f}) kl-div(0: {state['train/loss/kldiv/0']:.6f} k: {state['train/loss/kldiv/k']:.6f}))",
-        'gradient': f"(rate: {state['train/gradient/rate']:.2e} norm: {state['train/gradient/norm']:.4f})",
-        'iter': f"(time: {state['train/iter/time'] * 1000.0:.0f} tok/s: {state['train/iter/tps']:.0f})",
-        'vocab': f"(seen: {state['train/vocab/seen'] * 100.0:.1f}% max: {state['train/vocab/max'] * 100.0:.1f}%)",}
+        'epoch': f"({state['epoch/current']}/{state['epoch/total']})",
+        'step': f"({state['step/current']}/{state['step/total']})",
+        'loss': f"(ema: {state['loss/ema']:.6f} total: {state['loss/total']:.6f} mse(0: {state['loss/mse/0']:.6f} k: {state['loss/mse/k']:.6f}) kl-div(0: {state['loss/kldiv/0']:.6f} k: {state['loss/kldiv/k']:.6f}))",
+        'gradient': f"(rate: {state['gradient/rate']:.2e} norm: {state['gradient/norm']:.4f})",
+        'iter': f"(time: {state['iter/time'] * 1000.0:.0f} tok/s: {state['iter/tps']:.0f})",
+        'vocab': f"(seen: {state['vocab/seen'] * 100.0:.1f}% max: {state['vocab/max'] * 100.0:.1f}%)",
+        'switch': f"(train: {state['switch/train']} test: {state['switch/test']} grad: {state['switch/grad']} log: {state['switch/log']} save: {state['switch/save']})",}
 
 # TESTING ######################################################################
 
@@ -415,33 +421,27 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         # perform the backward propagation of the loss
         SCALER_OBJ.scale(__losses[-1]).backward()
 
-        # track the iteration progress
-        __state['train/epoch/total'] = TRAINING_CFG['epoch_num']
-        __state['train/epoch/current'] = __epoch + 1
-        __state['train/step/total'] = DATASET_DIM
-        __state['train/step/current'] = __step + 1
-
         # track token stats
         __count += torch.bincount(__indices_arr.flatten().cpu(), minlength=VOCAB_LEN)
-        __state['train/vocab/seen'] = float((__count > 0).sum().item()) / VOCAB_LEN
-        __state['train/vocab/max'] = float(__count.max().item()) / float(__count.sum().item())
+        __state['vocab/seen'] = float((__count > 0).sum().item()) / VOCAB_LEN
+        __state['vocab/max'] = float(__count.max().item()) / float(__count.sum().item())
 
         # the total loss is the average loss after N accumulation steps
-        __state['train/loss/mse/0'] += __losses[0].item()
-        __state['train/loss/mse/k'] += __losses[1].item()
-        __state['train/loss/kldiv/0'] += __losses[2].item()
-        __state['train/loss/kldiv/k'] += __losses[3].item()
-        __state['train/loss/total'] += __losses[-1].item()
+        __state['loss/mse/0'] += __losses[0].item()
+        __state['loss/mse/k'] += __losses[1].item()
+        __state['loss/kldiv/0'] += __losses[2].item()
+        __state['loss/kldiv/k'] += __losses[3].item()
+        __state['loss/total'] += __losses[-1].item()
 
         # optimizer step after gradient accumulation
-        if (__step + 1) % GRADIENT_CFG['step_num'] == 0:
+        if __state['switch/grad']:
             # track the loss EMA, default to the current loss for the first 128 steps
-            __state['train/loss/ema'] = mlable.utils.ema(average=__state['train/loss/ema'], current=__state['train/loss/total'], factor=0.99 * float(__step > 256))
+            __state['loss/ema'] = mlable.utils.ema(average=__state['loss/ema'], current=__state['loss/total'], factor=0.99 * float(__step > 256))
 
             # gradient clipping; unscale first to get true grad norm
             SCALER_OBJ.unscale_(OPTIMIZER_OBJ)
-            __state['train/gradient/rate'] = deformers.pipelines.monitor.current_lr(OPTIMIZER_OBJ)
-            __state['train/gradient/norm'] = torch.nn.utils.clip_grad_norm_(
+            __state['gradient/rate'] = deformers.pipelines.monitor.current_lr(OPTIMIZER_OBJ)
+            __state['gradient/norm'] = torch.nn.utils.clip_grad_norm_(
                 PREFIX_MOD.parameters(),
                 max_norm=GRADIENT_CFG['max_norm']).item()
 
@@ -452,8 +452,8 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             OPTIMIZER_OBJ.zero_grad()
 
             # timing and throughput
-            __state['train/iter/time'] = time.monotonic() - __state['train/iter/start']
-            __state['train/iter/tps'] = deformers.pipelines.monitor.throughput(BATCH_LEN, __state['train/iter/time'])
+            __state['iter/time'] = time.monotonic() - __state['iter/start']
+            __state['iter/tps'] = deformers.pipelines.monitor.throughput(BATCH_LEN, __state['iter/time'])
 
             # track the memory consumption too
             __state = {**__state, **deformers.pipelines.monitor.gpu_memory_mb()}
@@ -465,7 +465,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             __pbar.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
 
         # log only a fraction of the steps
-        if (__step + 1) % LOGGING_CFG['step_num'] == 0:
+        if __state['switch/log']:
             # write all the stats to the log file
             LOG_FILE.write(deformers.pipelines.monitor.serialize_state(state=__stats, prefix='[train] ') + '\n')
 
@@ -473,7 +473,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             deformers.pipelines.monitor.log_scalars(writer=LOG_TB, step=__step, scalars=__state)
 
         # test the prefix on independent data
-        if (__step + 1) % TESTING_CFG['step_num'] == 0:
+        if __state['switch/test']:
             with MIXED_CTX:
                 with torch.no_grad():
                     # embed the probe with the alternative prefix
@@ -492,17 +492,30 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
                     print(f"[test] loss(total: {__metrics[-1]:.6f} mse(0: {__metrics[0]:.6f} k: {__metrics[1]:.6f}) kl-div(0: {__metrics[2]:.6f} k: {__metrics[3]:.6f}))")
 
         # write to disk sporadically
-        if (__step + 1) % CHECKPOINT_CFG['step_num'] == 0:
+        if __state['switch/save']:
             # save the weights and config
             PREFIX_MOD.save_checkpoint(path=CHECKPOINT_CFG['save_path'])
 
         # reset only after the gradient accumulation
-        if (__step + 1) % GRADIENT_CFG['step_num'] == 0:
+        if __state['switch/grad']:
             # reset the accumulators and start the timing
             __state = deformers.pipelines.monitor.reset_state(state=__state, update=STATE_CFG)
 
         # track the global step (across epochs)
         __step += 1
+
+        # track the iteration progress
+        __state['epoch/total'] = TRAINING_CFG['epoch_num']
+        __state['epoch/current'] = __epoch + 1
+        __state['step/total'] = DATASET_DIM
+        __state['step/current'] = __step + 1
+
+        # check which processes should be run on this step
+        __state['switch/train'] = (__step + 1) % TESTING_CFG['step_num'] != 0
+        __state['switch/test'] = (__step + 1) % TESTING_CFG['step_num'] == 0
+        __state['switch/grad'] = (__step + 1) % GRADIENT_CFG['step_num'] == 0
+        __state['switch/log'] = (__step + 1) % LOGGING_CFG['step_num'] == 0
+        __state['switch/save'] = (__step + 1) % CHECKPOINT_CFG['step_num'] == 0
 
     # cleanup
     __pbar.close()
