@@ -154,7 +154,7 @@ SCHEDULER_CFG = { # counted in acc steps (not micro steps)
     'warmup_num': 128,}
 
 LOSS_CFG = {
-    'mse_0_rate': 1.0,
+    'mse_0_rate': 10.0,
     'mse_k_rate': 1.0,
     'kld_0_rate': 0.0,
     'kld_k_rate': 0.0,}
