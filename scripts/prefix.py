@@ -168,7 +168,6 @@ TESTING_CFG = {
 
 STATE_CFG = {
     'switch/train': lambda __x: 1,
-    'switch/test': lambda __x: 0,
     'switch/grad': lambda __x: 0,
     'switch/log': lambda __x: 0,
     'switch/save': lambda __x: 0,
@@ -348,13 +347,14 @@ def forward(
 def format_state(state: dict) -> dict:
     """Group and format the state variables to export them."""
     return {
+        '': f"[{' '.join(state['switch/train'] * ['train'] + (not state['switch/train']) * ['test'] + state['switch/grad'] * ['grad'] + state['switch/log'] * ['log'] + state['switch/save'] * ['save'])}]",
         'epoch': f"({state['epoch/current']}/{state['epoch/total']})",
         'step': f"({state['step/current']}/{state['step/total']})",
         'loss': f"(ema: {state['loss/ema']:.6f} total: {state['loss/total']:.6f} mse(0: {state['loss/mse/0']:.6f} k: {state['loss/mse/k']:.6f}) kl-div(0: {state['loss/kldiv/0']:.6f} k: {state['loss/kldiv/k']:.6f}))",
         'gradient': f"(rate: {state['gradient/rate']:.2e} norm: {state['gradient/norm']:.4f})",
         'iter': f"(time: {state['iter/time'] * 1000.0:.0f} tok/s: {state['iter/tps']:.0f})",
         'vocab': f"(seen: {state['vocab/seen'] * 100.0:.1f}% max: {state['vocab/max'] * 100.0:.1f}%)",
-        'switch': f"(train: {state['switch/train']} test: {state['switch/test']} grad: {state['switch/grad']} log: {state['switch/log']} save: {state['switch/save']})",}
+        }
 
 # TESTING ######################################################################
 
@@ -486,7 +486,6 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
 
         # check which processes should be run on this step
         __state['switch/train'] = ((__step + 1) % TESTING_CFG['step_num']) != 0
-        __state['switch/test'] = ((__step + 1) % TESTING_CFG['step_num']) == 0
         __state['switch/grad'] = ((__step + 1) % GRADIENT_CFG['step_num']) == 0
         __state['switch/log'] = ((__step + 1) % LOGGING_CFG['step_num']) == 0
         __state['switch/save'] = ((__step + 1) % CHECKPOINT_CFG['step_num']) == 0
