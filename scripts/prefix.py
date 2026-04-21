@@ -1,31 +1,28 @@
 """
-Replace
-
-Trains the CompositeBytePrefix module to distill from qwen/qwen3.5-9b by
-injecting prefix outputs via inputs_embeds into the frozen trunk.
+Trains the prefix (student) module to distill from an open source (teacher) model.
+The student embeddings are injected into the teacher and compared at depth 0 and K.
 
 Assumptions:
 - Base model is qwen/qwen3.5-9b with hidden_size=4096.
 - Tokenizer boundaries are identical to the base model.
 - Trunk is frozen during training; only the prefix parameters are trained.
-- Byte block size default follows docs/roadmap.md (L_max=32), configurable.
+- Byte block size default follows docs/roadmap.md (patch_dim=32), configurable.
 - The byte tokenizer uses pad_id=128 (as implemented by ByteTokenizer).
 
 Training scheme (Stage A):
 - Teacher: qwen/qwen3.5-9b forward with original input_ids (no grad).
 - Student: CompositeBytePrefix forward then trunk forward with inputs_embeds.
-- Loss: hidden-state MSE at depth k (configurable), optional embedding MSE.
+- Loss: MSE at depth 0 (embed) and K (hidden), plus optional KL-div at depth 0 and K
 - Only prefix parameters are updated; trunk is frozen.
+- Accumulated losses (embed, hidden, total) are unscaled and averaged.
 
 Monitoring (per optimizer step):
-- Progress bar (tqdm) with epoch, step, lr, embed MSE, hidden MSE, total loss, KL.
-- TensorBoard scalars: train/loss_total, train/loss_hidden, train/loss_embed,
-  train/lr, train/grad_norm, train/step_time_ms, gpu/memory_allocated_mb,
-  gpu/memory_reserved_mb.
-- KL divergence is computed for monitoring only (not added to the optimization loss).
-  It uses lm_head applied to the last micro-batch's hidden states (first item only
-  to limit memory overhead).
-- Accumulated losses (embed, hidden, total) are unscaled per-step means.
+- Progress bar (tqdm), TensorBoard scalars and plain text log file
+- Values tracked:
+    - loss: embed MSE, hidden MSE, total loss, EMA loss
+    - iteration: accumulation time, epoch and step
+    - gradients: learning rate, gradient norm
+    - GPU: allocated and reserved memory
 """
 
 import contextlib
