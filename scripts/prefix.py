@@ -172,7 +172,7 @@ STATE_CFG = {
     'switch/grad': lambda __x: 0,
     'switch/log': lambda __x: 0,
     'switch/save': lambda __x: 0,
-    'epoch/total': lambda __x: 0,
+    'epoch/total': lambda __x: TRAINING_CFG['epoch_num'],
     'epoch/current': lambda __x: 1,
     'step/total': lambda __x: 0,
     'step/current': lambda __x: 1,
@@ -364,15 +364,6 @@ PROBE_I = deformers.pipelines.eval.indices_probe(
     batch_dim=BATCH_CFG['batch_dim'],
     sequence_dim=BATCH_CFG['sequence_dim'])
 
-print('[init] encoding the testing batch...')
-PROBE_M, PROBE_I, PROBE_B = vectorize(PROBE_I)
-
-print('[init] embedding the testing batch...')
-with MIXED_CTX:
-    with torch.no_grad():
-        PROBE_0 = embed(indices_arr=PROBE_I)
-        PROBE_K = forward(embeds_arr=PROBE_0, mask_arr=PROBE_M)
-
 # CLEANUP ######################################################################
 
 print('[clean] freeing the unused memory...')
@@ -397,7 +388,9 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
 
     for __batch in __pbar:
         # mask (B, T), tokens (B, T), bytes (B, T, G) integers
-        __mask_arr, __indices_arr, __bytes_arr = vectorize(__batch['indices'])
+        __mask_arr, __indices_arr, __bytes_arr = vectorize(
+            __batch['indices'] if __state['switch/train']
+            else PROBE_I)
 
         # compute in bfloat16
         with MIXED_CTX:
@@ -434,7 +427,7 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __state['loss/total'] += __losses[-1].item()
 
         # optimizer step after gradient accumulation
-        if __state['switch/grad']:
+        if __state['switch/grad']: # (could be disabled when the input is the probe batch but whatever)
             # track the loss EMA, default to the current loss for the first 128 steps
             __state['loss/ema'] = mlable.utils.ema(average=__state['loss/ema'], current=__state['loss/total'], factor=0.99 * float(__step > 256))
 
@@ -467,29 +460,10 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         # log only a fraction of the steps
         if __state['switch/log']:
             # write all the stats to the log file
-            LOG_FILE.write(deformers.pipelines.monitor.serialize_state(state=__stats, prefix='[train] ') + '\n')
+            LOG_FILE.write(deformers.pipelines.monitor.serialize_state(state=__stats, prefix='') + '\n')
 
             # write all the stats to the tensorboard summary
             deformers.pipelines.monitor.log_scalars(writer=LOG_TB, step=__step, scalars=__state)
-
-        # test the prefix on independent data
-        if __state['switch/test']:
-            with MIXED_CTX:
-                with torch.no_grad():
-                    # embed the probe with the alternative prefix
-                    __probe_0_arr = PREFIX_MOD(PROBE_B).to(dtype=PROBE_0.dtype)
-                    __probe_k_arr = forward(embeds_arr=__probe_0_arr, mask_arr=PROBE_M)
-                    # combination of the MSE at depth 0 and k
-                    __metrics = score(
-                        teacher_0_arr=PROBE_0,
-                        student_0_arr=__probe_0_arr,
-                        teacher_k_arr=PROBE_K,
-                        student_k_arr=__probe_k_arr,
-                        mask_arr=PROBE_M)
-                    # rescale and format all the metrics
-                    __metrics = [float(GRADIENT_CFG['step_num']) * float(__m) for __m in __metrics]
-                    # log the testing results
-                    print(f"[test] loss(total: {__metrics[-1]:.6f} mse(0: {__metrics[0]:.6f} k: {__metrics[1]:.6f}) kl-div(0: {__metrics[2]:.6f} k: {__metrics[3]:.6f}))")
 
         # write to disk sporadically
         if __state['switch/save']:
@@ -511,11 +485,11 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         __state['step/current'] = __step + 1
 
         # check which processes should be run on this step
-        __state['switch/train'] = (__step + 1) % TESTING_CFG['step_num'] != 0
-        __state['switch/test'] = (__step + 1) % TESTING_CFG['step_num'] == 0
-        __state['switch/grad'] = (__step + 1) % GRADIENT_CFG['step_num'] == 0
-        __state['switch/log'] = (__step + 1) % LOGGING_CFG['step_num'] == 0
-        __state['switch/save'] = (__step + 1) % CHECKPOINT_CFG['step_num'] == 0
+        __state['switch/train'] = ((__step + 1) % TESTING_CFG['step_num']) != 0
+        __state['switch/test'] = ((__step + 1) % TESTING_CFG['step_num']) == 0
+        __state['switch/grad'] = ((__step + 1) % GRADIENT_CFG['step_num']) == 0
+        __state['switch/log'] = ((__step + 1) % LOGGING_CFG['step_num']) == 0
+        __state['switch/save'] = ((__step + 1) % CHECKPOINT_CFG['step_num']) == 0
 
     # cleanup
     __pbar.close()
