@@ -60,14 +60,14 @@ Objective: replace the token embedding layer while preserving model behavior.
 - [x] embedding regression warmup: MSE between prefix output and original embeddings
 - [x] hidden-state matching at depth `k` (distillation via `inputs_embeds`)
 - [x] trunk and lm_head are frozen; only prefix parameters are trained
-- [ ] optional KL divergence on logits (planned)
-- [ ] learning rate warmup and decay
-- [ ] apply the attention mask to both hidden and embed losses
-- [ ] track the KL divergence loss too
+- [x] optional KL divergence on logits (planned)
+- [x] learning rate warmup and decay
+- [x] apply the attention mask to both hidden and embed losses
+- [x] track the KL divergence loss too
 - [ ] use `accelerate`
 - [ ] two-stage curriculum:
-  - [ ] train only embedding MSE (set hidden_rate=0, embed_rate=1) until low plateau
-  - [ ] enable hidden loss (e.g. hidden_rate=1, embed_rate=0.05)
+  - [x] train only embedding MSE (set hidden_rate=0, embed_rate=1) until low plateau
+  - [x] enable hidden loss (e.g. hidden_rate=1, embed_rate=0.05)
   - [ ] could be extended by increasing the teacher's depth epoch after epoch
 
 ## Integration [done]
@@ -84,7 +84,7 @@ Objective: replace the token embedding layer while preserving model behavior.
   - [x] the current learning rate
   - [x] the embed, hidden and total MSE losses
   - [x] the KL divergence at the target depth
-  - [ ] the hidden MSE loss on a fixed tensor with the top-k tokens (deferred)
+  - [x] the hidden MSE loss on a fixed tensor with the top-k tokens
 - [x] add TensorBoard logging:
   - [x] train/loss_total
   - [x] train/loss_hidden
