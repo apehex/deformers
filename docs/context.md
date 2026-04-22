@@ -40,7 +40,7 @@ Experiment with model level composition and test the modularity.
 - keep the information on the token composition
 - test modular training and composition of sub-models
 
-## Current Experiment: Prefix Stage A
+## Current Experiment: Prefix Patch
 
 The active experiment trains a byte-based prefix module to replace the original embedding layer.
 

@@ -58,23 +58,22 @@ Token strings are encoded as follows:
 
 Rationale: a fixed patch length makes the byte-to-embedding projection architecture simple and the input shape fully static.
 
-## Training Decomposition (Stage A)
+## Training Decomposition
 
 - frozen: trunk transformer layers and lm_head; their weights are never updated
 - trained: prefix module only (the byte-to-embedding projection)
 - teacher signals are computed with a single forward pass through the frozen trunk
 
-This decomposition is intentional for Stage A.
-It decouples prefix alignment from trunk adaptation and keeps the training surface small.
+This decomposition keeps the training surface small and decouples prefix alignment from trunk adaptation.
 
 ## Metric Policy
 
 - primary training loss: embedding MSE (student prefix output vs teacher embedding at depth 0) plus hidden-state MSE at a chosen trunk depth k
-- KL divergence on residuals: can be added as a shape metric to compare the distribution of embedding or hidden-state vectors; this is NOT token-probability KL and does not require softmax over the vocabulary
-- token-probability KL (logit KL): tracked as an evaluation metric but not used as the primary training loss in Stage A
+- norm-aware shape metrics: cosine similarity and L2 norm comparison between student and teacher vectors; these are preferred over KL divergence for embedding and hidden-state comparison because they do not require interpreting the vectors as probability distributions
+- token-probability KL (logit KL): tracked as an evaluation metric for comparing output distributions; not used as the primary training loss
 - top-k agreement rate: tracked per step and on fixed probes
 
-Rationale: embedding MSE and hidden-state MSE provide stable gradients; KL on logits is noisy early in training and is better used as a diagnostic.
+Rationale: MSE and cosine similarity provide stable, interpretable gradients for vector-space alignment; logit KL is noisy early in training and is better used as a diagnostic of downstream behavioral alignment.
 
 ## Masking Policy
 
@@ -89,8 +88,9 @@ Rationale: including padding positions would dilute the loss and distort gradien
 
 ## Normalization Axis Convention
 
-- default preference: `LayerNorm` along the feature (hidden) dimension, consistent with the sequence layout `(B, T, H)`
+- default: `LayerNorm` along the feature (hidden) dimension, consistent with the sequence layout `(B, T, H)`
+- alternative: `RMSNorm` as a lighter drop-in replacement for `LayerNorm`; preferred when scale-only normalization is sufficient
 - if using `GroupNorm` or other channel-first norms: transpose to `(B, H, T)` before applying the norm, then transpose back
-- prefer `LayerNorm` in new modules unless there is a concrete reason to use `GroupNorm`
+- no-norm variant: removing normalization entirely is a valid ablation; rely on initialization and learning rate instead
 
 Rationale: keeps the layout consistent with HuggingFace transformer conventions and avoids silent shape errors from channel-first vs channel-last mismatch.

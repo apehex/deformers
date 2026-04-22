@@ -44,28 +44,32 @@ Objective: replace the token embedding layer while preserving model behavior.
 - [x] truncate longer tokens
 - [x] preprocessing in `src/deformers/pipelines/patch.py`
 
-## Architecture [done]
+## Architecture [~]
 
-- [x] Stage A:
-  - [x] `CompositeBytePrefix` in `src/deformers/layers/prefix.py`
-  - [x] `CompositeEmbedding(256, embed_dim, group_dim=G, merge_axes=True)` -> `(B, T, G*E)`
-  - [x] `LayerNorm -> Linear -> SiLU -> Linear -> LayerNorm` projection to `hidden_size`
-  - [x] lazy-build, no explicit device args, submodules registered as `self._layers`
-- [ ] Stage B (planned): add a copied Qwen decoder block inside the prefix
-- [ ] Stage C (planned): small byte-level transformer over G positions
+Current implementation:
+- [x] `CompositeBytePrefix` in `src/deformers/layers/prefix.py`
+- [x] `CompositeEmbedding(256, embed_dim, group_dim=G, merge_axes=True)` -> `(B, T, G*E)`
+- [x] `LayerNorm -> Linear -> SiLU -> Linear -> LayerNorm` projection to `hidden_size`
+- [x] lazy-build, no explicit device args, submodules registered as `self._layers`
+
+Architecture experiments (planned):
+- [ ] norm variant: replace LayerNorm with RMSNorm
+- [ ] no-norm variant: remove normalization layers entirely
+- [ ] attention on patch axis: add a self-attention layer over the G byte-embedding positions within each patch (byte embedding axis kept separate)
+- [ ] wider MLP: increase intermediate dimension in the projection MLP
+- [ ] add a transformer decoder block inside the prefix (deeper context integration)
 
 ## Training [~]
 
-- [x] training script: `scripts/train_prefix_stage_a.py`
+- [x] training script: `scripts/train_prefix.py`
 - [x] embedding regression warmup: MSE between prefix output and original embeddings
 - [x] hidden-state matching at depth `k` (distillation via `inputs_embeds`)
 - [x] trunk and lm_head are frozen; only prefix parameters are trained
-- [x] optional KL divergence on logits (planned)
 - [x] learning rate warmup and decay
 - [x] apply the attention mask to both hidden and embed losses
-- [x] track the KL divergence loss too
+- [x] track cosine similarity and norm-aware metrics alongside MSE
 - [ ] use `accelerate`
-- [ ] two-stage curriculum:
+- [ ] curriculum:
   - [x] train only embedding MSE (set hidden_rate=0, embed_rate=1) until low plateau
   - [x] enable hidden loss (e.g. hidden_rate=1, embed_rate=0.05)
   - [ ] could be extended by increasing the teacher's depth epoch after epoch
@@ -105,10 +109,11 @@ Primary objective:
 Core metrics:
 - [x] embedding reconstruction error (MSE)
 - [x] hidden-state similarity (MSE at depth `k`)
-- [x] KL divergence between teacher and student logits
+- [x] cosine similarity between student and teacher embeddings / hidden states
 - [x] top-1 match rate
 - [x] top-k set match rate
 - [x] top-k exact order match rate (strict)
+- [x] logit KL divergence (token-probability comparison)
 - [ ] loss on the most prevalent tokens (top-k vocab)
 - [ ] delta predictions on a fixed sentence
 
@@ -118,15 +123,16 @@ Secondary checks:
 
 ## Near-term tasks
 
-1. [x] build Stage A evaluation script:
-   - [x] `scripts/benchmark.py` - true evaluation entrypoint (no training)
-   - [x] fixed validation subset (`train[90%:]`)
-   - [x] teacher vs student logits comparison (KL, top-1, top-k set, top-k order)
-   - [x] fixed sentence probe: teacher vs student top-k tokens
-   - [x] vocab probe: deterministic (B, T) token tensor evaluation
-   - [x] shared helpers in `src/deformers/pipelines/eval.py`
+1. [ ] update evaluation script:
+   - [ ] rewrite `scripts/benchmark.py` using latest `deformers` and `mlable` APIs
+   - [ ] fixed validation subset (`train[90%:]`)
+   - [ ] teacher vs student logits comparison (top-1, top-k set, top-k order, logit KL)
+   - [ ] cosine similarity and norm metrics on embeddings and hidden states
+   - [ ] fixed sentence probe: teacher vs student top-k tokens
+   - [ ] vocab probe: deterministic (B, T) token tensor evaluation
+   - [ ] shared helpers in `src/deformers/pipelines/eval.py`
 2. [ ] define stop criteria:
-   - [ ] early stop on KL + top-k exact order plateau
+   - [ ] early stop on cosine similarity + top-k exact order plateau
 3. [ ] export and load pipeline:
    - [x] save/load prefix checkpoint (`load_prefix_checkpoint` in eval.py)
    - [ ] run end-to-end generation with patched prefix
@@ -141,7 +147,7 @@ Objective: understand current error distribution before changing the architectur
 
 ## Token-wise Error Analysis
 
-- [ ] per-token table: report embed MSE, hidden MSE, and logit KL for every token in a fixed probe batch
+- [ ] per-token table: report embed MSE, cosine similarity, hidden MSE, and logit KL for every token in a fixed probe batch
 - [ ] break down errors by:
   - [ ] token frequency (common vs rare tokens)
   - [ ] byte length (short tokens, long tokens, truncated tokens)
@@ -157,17 +163,16 @@ Objective: understand current error distribution before changing the architectur
 ## Calibration Experiments
 
 - [ ] controlled noise injection: add Gaussian noise of varying scale to teacher embeddings, then measure the effect on:
-  - [ ] hidden-state MSE at depth k
-  - [ ] logit KL divergence
-  - [ ] top-k token agreement rate
+  - [ ] hidden-state MSE and cosine similarity at depth k
+  - [ ] logit KL divergence and top-k token agreement rate
   - [ ] perplexity on a fixed text probe
 - [ ] produce error-vs-noise curves to define the acceptable error scale for the prefix output
 - [ ] use these curves to set concrete convergence targets
 
 ## Evaluation Improvements
 
-- [ ] multi-depth hidden-state MSE: track MSE at several trunk depths (not only depth k)
-- [ ] add logit KL and top-k metrics directly in the training validation loop (not only in benchmark.py)
+- [ ] multi-depth hidden-state MSE and cosine similarity: track at several trunk depths (not only depth k)
+- [ ] add cosine similarity, logit KL, and top-k metrics directly in the training validation loop
 - [ ] fixed vocab probe: deterministic (B, T) tensor covering uniform token distribution, tracked every N steps
 - [ ] fixed sentence probe: teacher vs student logits on a fixed sentence, tracked every N steps
 
@@ -179,11 +184,12 @@ Objective: understand current error distribution before changing the architectur
   - [ ] alignment phase: switch to real text (Wikipedia or similar) for contextual alignment
 - [ ] document the chosen schedule and rationale once decided
 
-## Architecture Ablations (later stage)
+## Architecture Experiments
 
-- [ ] norm comparison: no norm vs LayerNorm vs GroupNorm (with explicit axis handling notes)
-- [ ] wider MLP: test larger intermediate dimension in the projection MLP
-- [ ] local byte mixer: convolutional or attention-based mixer over the G byte positions within a patch (Stage C candidate)
+- [ ] norm variant: RMSNorm instead of LayerNorm in the projection head
+- [ ] no-norm variant: remove all normalization layers, rely on weight initialization and learning rate
+- [ ] attention on patch axis: self-attention over G byte-embedding positions within each patch (byte embedding axis kept separate from sequence axis)
+- [ ] wider MLP: increase intermediate dimension in the projection MLP
 
 ---
 
@@ -378,7 +384,8 @@ Not required for prefix/suffix patching pipeline.
 - optimal byte embedding dimension
 - impact of truncation on rare tokens
 - best depth for hidden-state alignment
-- does a local byte mixer (conv or attention over G positions) improve alignment quality?
+- does attention over the patch axis (G byte-embedding positions) improve alignment quality?
+- is LayerNorm, RMSNorm, or no normalization best for the projection head?
 
 ## Data
 
@@ -396,4 +403,4 @@ Not required for prefix/suffix patching pipeline.
 - minimal compute required for alignment
 - optimal loss weighting between embedding MSE and hidden-state MSE
 - stability of frozen-trunk distillation
-- does wider MLP intermediate dimension improve prefix quality?
+- does a wider MLP intermediate dimension improve prefix quality?
