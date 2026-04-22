@@ -135,6 +135,58 @@ Secondary checks:
 
 ---
 
+# Phase 1.5 - Inspection, Instrumentation, and Calibration
+
+Objective: understand current error distribution before changing the architecture or training recipe.
+
+## Token-wise Error Analysis
+
+- [ ] per-token table: report embed MSE, hidden MSE, and logit KL for every token in a fixed probe batch
+- [ ] break down errors by:
+  - [ ] token frequency (common vs rare tokens)
+  - [ ] byte length (short tokens, long tokens, truncated tokens)
+  - [ ] token type (leading-space tokens, punctuation, long-byte / binary tokens)
+- [ ] identify which token classes drive the highest loss
+
+## Geometry Diagnostics
+
+- [ ] norm distribution: compare L2 norms of student vs teacher embeddings and hidden states
+- [ ] cosine similarity: distribution of cosine similarities between student and teacher vectors per token
+- [ ] anisotropy: measure the degree of isotropy in student vs teacher embedding spaces
+
+## Calibration Experiments
+
+- [ ] controlled noise injection: add Gaussian noise of varying scale to teacher embeddings, then measure the effect on:
+  - [ ] hidden-state MSE at depth k
+  - [ ] logit KL divergence
+  - [ ] top-k token agreement rate
+  - [ ] perplexity on a fixed text probe
+- [ ] produce error-vs-noise curves to define the acceptable error scale for the prefix output
+- [ ] use these curves to set concrete convergence targets
+
+## Evaluation Improvements
+
+- [ ] multi-depth hidden-state MSE: track MSE at several trunk depths (not only depth k)
+- [ ] add logit KL and top-k metrics directly in the training validation loop (not only in benchmark.py)
+- [ ] fixed vocab probe: deterministic (B, T) tensor covering uniform token distribution, tracked every N steps
+- [ ] fixed sentence probe: teacher vs student logits on a fixed sentence, tracked every N steps
+
+## Data Strategy
+
+- [ ] explicit distribution mix: decide between uniform vocab coverage dataset and real text dataset
+- [ ] phased training:
+  - [ ] coverage prephase: train on uniform token-id dataset (all vocab IDs sampled uniformly)
+  - [ ] alignment phase: switch to real text (Wikipedia or similar) for contextual alignment
+- [ ] document the chosen schedule and rationale once decided
+
+## Architecture Ablations (later stage)
+
+- [ ] norm comparison: no norm vs LayerNorm vs GroupNorm (with explicit axis handling notes)
+- [ ] wider MLP: test larger intermediate dimension in the projection MLP
+- [ ] local byte mixer: convolutional or attention-based mixer over the G byte positions within a patch (Stage C candidate)
+
+---
+
 # Phase 2 - Suffix Patch (Hierarchical Head)
 
 Objective: replace the output projection layer.
@@ -321,9 +373,17 @@ Not required for prefix/suffix patching pipeline.
 
 ## Prefix
 
+- which token classes drive the highest embedding and hidden-state error?
+- what is the acceptable error scale for the prefix output (calibration target)?
 - optimal byte embedding dimension
 - impact of truncation on rare tokens
 - best depth for hidden-state alignment
+- does a local byte mixer (conv or attention over G positions) improve alignment quality?
+
+## Data
+
+- what is the right balance between uniform vocab coverage and real text distribution?
+- does a coverage prephase before alignment phase improve convergence?
 
 ## Suffix
 
@@ -334,5 +394,6 @@ Not required for prefix/suffix patching pipeline.
 ## Training
 
 - minimal compute required for alignment
-- optimal loss weighting
+- optimal loss weighting between embedding MSE and hidden-state MSE
 - stability of frozen-trunk distillation
+- does wider MLP intermediate dimension improve prefix quality?
