@@ -7,7 +7,7 @@ Assumptions:
 - All reductions are over the (B, T) token positions; mask excludes padding.
 - Vocab probe uses consecutive IDs modulo vocab_dim (deterministic, ascending).
 - Text probe uses offset-based byte patching aligned to the base tokenizer boundaries.
-- Checkpoint format: dict with keys 'config' and 'state'.
+- Checkpoint format: CompositeBytePrefix save format with keys 'config' and 'state'.
 """
 
 import datetime
@@ -35,25 +35,6 @@ def indices_probe(
 
 # METRICS ######################################################################
 
-def masked_mse(
-    predict_arr: torch.Tensor,
-    target_arr: torch.Tensor,
-    mask_arr: torch.Tensor,
-) -> torch.Tensor:
-    """Masked per-token MSE over (B, T, H) tensors.
-
-    Computes mean squared error per token position (averaged over the H dim),
-    then averages over valid (non-padding) token positions.
-    mask_arr is (B, T) binary; zero entries are excluded from the mean.
-    Returns a non-negative scalar.
-    """
-    # (B, T, H) -> (B, T)
-    __per_token = ((predict_arr - target_arr) ** 2).mean(dim=-1)
-    __mask = mask_arr.float()
-    __denom = __mask.sum().clamp(min=1.0)
-    return (__per_token * __mask).sum() / __denom
-
-
 def masked_cosine(
     predict_arr: torch.Tensor,
     target_arr: torch.Tensor,
@@ -71,70 +52,27 @@ def masked_cosine(
     return (__cos * __mask).sum() / __denom
 
 
-def kl_divergence(
+def topk_set_rate(
     student_arr: torch.Tensor,
     teacher_arr: torch.Tensor,
-    mask_arr: torch.Tensor=None,
-) -> torch.Tensor:
-    """Per-token KL divergence KL(teacher || student), averaged over valid positions.
-
-    student_arr, teacher_arr: (B, T, V) logits (not probabilities).
-    mask_arr: (B, T) binary; if None, all positions are included.
-    Returns a non-negative scalar.
-    """
-    # log-softmax of student (Q), softmax of teacher (P)
-    __log_q = torch.nn.functional.log_softmax(student_arr, dim=-1)
-    __p = torch.nn.functional.softmax(teacher_arr, dim=-1)
-    # per-logit KL terms -> sum over vocab -> per-token KL: (B, T)
-    __per_token = torch.nn.functional.kl_div(__log_q, __p, reduction='none').sum(dim=-1)
-    if mask_arr is None:
-        return __per_token.mean()
-    __mask = mask_arr.float()
-    __denom = __mask.sum().clamp(min=1.0)
-    return (__per_token * __mask).sum() / __denom
-
-
-def topk_rate(
-    student_arr: torch.Tensor,
-    teacher_arr: torch.Tensor,
-    mask_arr: torch.Tensor=None,
+    mask_arr: torch.Tensor,
     k_num: int=10,
-    ordered: bool=False,
 ) -> torch.Tensor:
-    """Top-k agreement rate between student and teacher logits.
+    """Top-k set overlap rate between student and teacher logits.
 
-    student_arr, teacher_arr: (B, T, V) logits.
-    ordered=False: fraction of teacher top-k tokens present in student top-k (set match).
-    ordered=True:  1.0 iff student and teacher top-k are in the exact same order.
-    mask_arr: (B, T) binary; if None, all positions are included.
-    Returns a scalar in [0, 1].
+    Returns the average fraction of teacher top-k IDs that are present in the
+    student top-k set, masked over valid token positions.
     """
     __k = min(k_num, student_arr.shape[-1])
-    # (B, T, k) indices
     __t_top = teacher_arr.topk(__k, dim=-1).indices
     __s_top = student_arr.topk(__k, dim=-1).indices
-    if ordered:
-        # (B, T): all k positions must match
-        __match = (__t_top == __s_top).all(dim=-1).float()
-    else:
-        # (B, T, k, 1) vs (B, T, 1, k): check if each teacher token appears in student top-k
-        __overlap = (__t_top.unsqueeze(-1) == __s_top.unsqueeze(-2)).any(dim=-1).float()
-        # (B, T): fraction of teacher top-k tokens found in student top-k
-        __match = __overlap.mean(dim=-1)
-    if mask_arr is None:
-        return __match.mean()
+    # (B, T, k): for each teacher top-k token, did it appear in student top-k?
+    __overlap = (__t_top.unsqueeze(-1) == __s_top.unsqueeze(-2)).any(dim=-1).float()
+    # (B, T): fraction in [0, 1]
+    __match = __overlap.mean(dim=-1)
     __mask = mask_arr.float()
     __denom = __mask.sum().clamp(min=1.0)
     return (__match * __mask).sum() / __denom
-
-
-def top1_rate(
-    student_arr: torch.Tensor,
-    teacher_arr: torch.Tensor,
-    mask_arr: torch.Tensor=None,
-) -> torch.Tensor:
-    """Top-1 agreement rate: fraction of positions where top prediction matches."""
-    return topk_rate(student_arr, teacher_arr, mask_arr=mask_arr, k_num=1, ordered=True)
 
 # INSPECTION ###################################################################
 
@@ -254,7 +192,7 @@ def load_prefix_checkpoint(
     assert os.path.isfile(path), (
         f'[eval] prefix checkpoint not found: {path}\n'
         f'       In Colab: upload the checkpoint to /content/checkpoints/ first.\n'
-        f'       Or pass --checkpoint /path/to/prefix.pt on the command line.')
+        f'       Or edit CHECKPOINT_CFG["path"] in scripts/benchmark.py.')
     return deformers.layers.prefix.CompositeBytePrefix.load_checkpoint(
         path=path,
         shape=shape,

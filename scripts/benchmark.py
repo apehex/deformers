@@ -1,18 +1,9 @@
 """
 Benchmark / evaluation script for prefix patch experiments.
 
-Usage (local):
-    python scripts/benchmark.py --checkpoint path/to/prefix.pt
-
 Usage (Colab):
+    edit CHECKPOINT_CFG['path'] if needed, then:
     !python scripts/benchmark.py
-    (uploads prefix.pt to /content/checkpoints/ before running)
-
-Arguments:
-    --checkpoint  path to the prefix checkpoint (.pt file)
-                  default: /content/checkpoints/prefix.pt
-    --log-dir     directory for report artifacts and TensorBoard logs
-                  default: .logs
 
 Assumptions:
 - Base model is qwen/qwen3.5-9b with hidden_size=4096.
@@ -36,11 +27,10 @@ Probes:
 
 Reports:
 - summary printed to stdout
-- machine-readable JSON saved under --log-dir
+- machine-readable JSON saved under LOGGING_CFG['log_dir']
 - TensorBoard scalars logged under benchmark/*
 """
 
-import argparse
 import contextlib
 import functools
 import os
@@ -54,32 +44,14 @@ import torch.nn.functional
 import torch.utils.tensorboard
 import transformers
 
+import mlable.losses
+import mlable.metrics
 import mlable.models
 
-import deformers.layers.prefix
 import deformers.models.generic
 import deformers.pipelines.eval
-import deformers.pipelines.patch
 import deformers.pipelines.prefix
 import deformers.tokenizers.byte
-
-# CLI ##########################################################################
-
-def _parse_args():
-    __p = argparse.ArgumentParser(description='Benchmark a trained prefix checkpoint.')
-    __p.add_argument(
-        '--checkpoint',
-        type=str,
-        default='/content/checkpoints/prefix.pt',
-        help='path to the prefix checkpoint (default: /content/checkpoints/prefix.pt)')
-    __p.add_argument(
-        '--log-dir',
-        type=str,
-        default='.logs',
-        help='directory for report artifacts and TensorBoard logs (default: .logs)')
-    return __p.parse_args()
-
-ARGS = _parse_args()
 
 # COMMON CONFIG ################################################################
 
@@ -92,7 +64,8 @@ MAIN_CFG = {
     'batch_dim': 4,
     'sequence_dim': 256,
     'patch_dim': 32,
-    'depth_num': 1,   # trunk depth for hidden-state matching; must match training config
+    # trunk depth for hidden-state matching; keep aligned with scripts/prefix.py MAIN_CFG['depth_num']
+    'depth_num': 1,
     'batch_num': 16,
     'topk_num': 10,}
 
@@ -140,7 +113,7 @@ MODEL_CFG = {
 # CHECKPOINT CONFIG ############################################################
 
 CHECKPOINT_CFG = {
-    'path': ARGS.checkpoint,
+    'path': '/content/checkpoints/prefix.pt',
     'shape': (BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
     'device': MAIN_CFG['device_str'],}
 
@@ -158,15 +131,7 @@ EVAL_CFG = {
 # OUTPUT CONFIG ################################################################
 
 LOGGING_CFG = {
-    'log_dir': ARGS.log_dir,}
-
-# CHECKPOINT VALIDATION ########################################################
-
-print(f'[init] checking checkpoint: {CHECKPOINT_CFG["path"]}')
-assert os.path.isfile(CHECKPOINT_CFG['path']), (
-    f'[ERROR] prefix checkpoint not found: {CHECKPOINT_CFG["path"]}\n'
-    f'        In Colab: upload the file to /content/checkpoints/ first.\n'
-    f'        Or pass --checkpoint /path/to/prefix.pt on the command line.')
+    'log_dir': os.path.abspath('.logs'),}
 
 # MIXED PRECISION ##############################################################
 
@@ -299,24 +264,37 @@ for __batch in __dataset:
         __student_logits = SOURCE_MOD.lm_head(__student_hidden)
 
     # accumulate masked metrics
-    __sum_embed_mse += deformers.pipelines.eval.masked_mse(
-        __student_embeds.float(), __teacher_embeds.float(), __mask_arr).item()
+    __sum_embed_mse += mlable.losses.mse_loss(
+        predict_arr=__student_embeds.float(),
+        target_arr=__teacher_embeds.float(),
+        mask_arr=__mask_arr).item()
     __sum_embed_cos += deformers.pipelines.eval.masked_cosine(
         __student_embeds.float(), __teacher_embeds.float(), __mask_arr).item()
-    __sum_hidden_mse += deformers.pipelines.eval.masked_mse(
-        __student_hidden.float(), __teacher_hidden.float(), __mask_arr).item()
+    __sum_hidden_mse += mlable.losses.mse_loss(
+        predict_arr=__student_hidden.float(),
+        target_arr=__teacher_hidden.float(),
+        mask_arr=__mask_arr).item()
     __sum_hidden_cos += deformers.pipelines.eval.masked_cosine(
         __student_hidden.float(), __teacher_hidden.float(), __mask_arr).item()
-    __sum_kl += deformers.pipelines.eval.kl_divergence(
-        __student_logits.float(), __teacher_logits.float(), __mask_arr).item()
-    __sum_top1 += deformers.pipelines.eval.top1_rate(
-        __student_logits, __teacher_logits, __mask_arr).item()
-    __sum_topk_set += deformers.pipelines.eval.topk_rate(
-        __student_logits, __teacher_logits, __mask_arr,
-        k_num=EVAL_CFG['topk_num'], ordered=False).item()
-    __sum_topk_ord += deformers.pipelines.eval.topk_rate(
-        __student_logits, __teacher_logits, __mask_arr,
-        k_num=EVAL_CFG['topk_num'], ordered=True).item()
+    __sum_kl += mlable.losses.kl_div(
+        predict_arr=__student_logits.float(),
+        target_arr=__teacher_logits.float(),
+        mask_arr=__mask_arr).item()
+    __sum_top1 += mlable.metrics.topk_rate(
+        predict_arr=__student_logits,
+        target_arr=__teacher_logits,
+        mask_arr=__mask_arr,
+        k_num=1).item()
+    __sum_topk_set += deformers.pipelines.eval.topk_set_rate(
+        student_arr=__student_logits,
+        teacher_arr=__teacher_logits,
+        mask_arr=__mask_arr,
+        k_num=EVAL_CFG['topk_num']).item()
+    __sum_topk_ord += mlable.metrics.topk_rate(
+        predict_arr=__student_logits,
+        target_arr=__teacher_logits,
+        mask_arr=__mask_arr,
+        k_num=EVAL_CFG['topk_num']).item()
 
     __n_batches += 1
     if __n_batches % 4 == 0:
@@ -432,18 +410,27 @@ if EVAL_CFG['vocab_probe']:
         __v_student_hidden = forward(__v_student_embeds, __vocab_mask)
         __v_student_logits = SOURCE_MOD.lm_head(__v_student_hidden)
 
-    __v_embed_mse = deformers.pipelines.eval.masked_mse(
-        __v_student_embeds.float(), __v_teacher_embeds.float(), __vocab_mask).item()
+    __v_embed_mse = mlable.losses.mse_loss(
+        predict_arr=__v_student_embeds.float(),
+        target_arr=__v_teacher_embeds.float(),
+        mask_arr=__vocab_mask).item()
     __v_embed_cos = deformers.pipelines.eval.masked_cosine(
         __v_student_embeds.float(), __v_teacher_embeds.float(), __vocab_mask).item()
-    __v_hidden_mse = deformers.pipelines.eval.masked_mse(
-        __v_student_hidden.float(), __v_teacher_hidden.float(), __vocab_mask).item()
+    __v_hidden_mse = mlable.losses.mse_loss(
+        predict_arr=__v_student_hidden.float(),
+        target_arr=__v_teacher_hidden.float(),
+        mask_arr=__vocab_mask).item()
     __v_hidden_cos = deformers.pipelines.eval.masked_cosine(
         __v_student_hidden.float(), __v_teacher_hidden.float(), __vocab_mask).item()
-    __v_kl = deformers.pipelines.eval.kl_divergence(
-        __v_student_logits.float(), __v_teacher_logits.float(), __vocab_mask).item()
-    __v_top1 = deformers.pipelines.eval.top1_rate(
-        __v_student_logits, __v_teacher_logits, __vocab_mask).item()
+    __v_kl = mlable.losses.kl_div(
+        predict_arr=__v_student_logits.float(),
+        target_arr=__v_teacher_logits.float(),
+        mask_arr=__vocab_mask).item()
+    __v_top1 = mlable.metrics.topk_rate(
+        predict_arr=__v_student_logits,
+        target_arr=__v_teacher_logits,
+        mask_arr=__vocab_mask,
+        k_num=1).item()
 
     print(f'[eval] vocab embed MSE     : {__v_embed_mse:.6f}')
     print(f'[eval] vocab embed cosine  : {__v_embed_cos:.4f}')
