@@ -67,7 +67,7 @@ Architecture experiments (planned):
 - [x] trunk and lm_head are frozen; only prefix parameters are trained
 - [x] learning rate warmup and decay
 - [x] apply the attention mask to both hidden and embed losses
-- [x] track cosine similarity and norm-aware metrics alongside MSE
+- [x] track cosine similarity alongside MSE
 - [ ] use `accelerate`
 - [ ] curriculum:
   - [x] train only embedding MSE (set hidden_rate=0, embed_rate=1) until low plateau

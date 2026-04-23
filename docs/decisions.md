@@ -69,7 +69,6 @@ This decomposition keeps the training surface small and decouples prefix alignme
 ## Metric Policy
 
 - primary training loss: embedding MSE (student prefix output vs teacher embedding at depth 0) plus hidden-state MSE at a chosen trunk depth k
-- norm-aware shape metrics: cosine similarity and L2 norm comparison between student and teacher vectors; these are preferred over KL divergence for embedding and hidden-state comparison because they do not require interpreting the vectors as probability distributions
 - token-probability KL (logit KL): tracked as an evaluation metric for comparing output distributions; not used as the primary training loss
 - top-k agreement rate: tracked per step and on fixed probes
 
