@@ -44,3 +44,52 @@ print([__t.encode('utf-8').hex() for __t in TOKENIZER_OBJ.get_vocab().keys() if 
 #  'c3a0c2b8c2b3c3a0c2b8c4bbc3a0c2b8c2a7c3a0c2b8c2a2c3a0c2b8c4a3c3a0c2b8c2b2c3a0c2b8c2a3',
 #  'c4a0c390c2b4c390c2b5c390c2b9c391c4a3c391c4a4c390c2b2c390c2bec390c2b2c390c2b0c391c4a4c391c4ae']
 ```
+
+## Prefix Input Encoding
+
+Token strings are encoded as follows:
+
+- source: raw token-piece strings obtained via `tokenizer.get_vocab()` (not `decode()`), to preserve the exact byte composition of each learned BPE symbol
+- encoding: UTF-8 bytes per token-piece
+- fixed patch length: 32 bytes
+- padding: shorter tokens are right-padded with null bytes (byte value 128)
+- truncation: tokens longer than 32 bytes are truncated; this affects ~2.6% of the vocabulary (mostly binary/CJK data tokens)
+- padding token: the tokenizer pad token (`<|endoftext|>`) is replaced by an empty string before byte encoding, so it maps to a full patch of padding bytes
+
+Rationale: a fixed patch length makes the byte-to-embedding projection architecture simple and the input shape fully static.
+
+## Training Decomposition
+
+- frozen: trunk transformer layers and lm_head; their weights are never updated
+- trained: prefix module only (the byte-to-embedding projection)
+- teacher signals are computed with a single forward pass through the frozen trunk
+
+This decomposition keeps the training surface small and decouples prefix alignment from trunk adaptation.
+
+## Metric Policy
+
+- primary training loss: embedding MSE (student prefix output vs teacher embedding at depth 0) plus hidden-state MSE at a chosen trunk depth k
+- token-probability KL (logit KL): tracked as an evaluation metric for comparing output distributions; not used as the primary training loss
+- top-k agreement rate: tracked per step and on fixed probes
+
+Rationale: MSE and cosine similarity provide stable, interpretable gradients for vector-space alignment; logit KL is noisy early in training and is better used as a diagnostic of downstream behavioral alignment.
+
+## Masking Policy
+
+All losses and metrics must exclude positions corresponding to padding tokens.
+
+- attention mask shape: `(B,)` or `(B, T)`; broadcast to match the loss tensor
+- masked MSE: multiply squared error by the mask before reduction; normalize by the count of valid (non-padding) positions
+- masked KL: compute per-token KL first (sum over vocab dimension), then apply the mask and normalize by the number of valid tokens
+- masked top-k: apply the mask to per-position match indicators before averaging
+
+Rationale: including padding positions would dilute the loss and distort gradient estimates, especially when sequences have variable length.
+
+## Normalization Axis Convention
+
+- default: `LayerNorm` along the feature (hidden) dimension, consistent with the sequence layout `(B, T, H)`
+- alternative: `RMSNorm` as a lighter drop-in replacement for `LayerNorm`; preferred when scale-only normalization is sufficient
+- if using `GroupNorm` or other channel-first norms: transpose to `(B, H, T)` before applying the norm, then transpose back
+- no-norm variant: removing normalization entirely is a valid ablation; rely on initialization and learning rate instead
+
+Rationale: keeps the layout consistent with HuggingFace transformer conventions and avoids silent shape errors from channel-first vs channel-last mismatch.
