@@ -61,7 +61,7 @@ Architecture experiments (planned):
 
 ## Training [~]
 
-- [x] training script: `scripts/train_prefix.py`
+- [x] training script: `scripts/prefix.py`
 - [x] embedding regression warmup: MSE between prefix output and original embeddings
 - [x] hidden-state matching at depth `k` (distillation via `inputs_embeds`)
 - [x] trunk and lm_head are frozen; only prefix parameters are trained
