@@ -67,17 +67,24 @@ class CompositeBytePrefix(torch.nn.Module):
             __embed_dim = __group_dim * self._config['embed_dim']
             # projection target dimension: defaults to merged embed dim
             __latent_dim = __embed_dim if (self._config['latent_dim'] < 1) else self._config['latent_dim']
-            # (B, T, G) => (B, T, G*E)
-            __embed = mlable.layers.embedding.CompositeEmbedding(
-                input_dim=self._config['vocab_dim'],
-                output_dim=self._config['embed_dim'],
-                group_dim=self._config['group_dim'],
-                merge_axes=True)
+            # divide only if necessary (B, T*G) => (B, T, G) or (B, T, G) => (B, T, G)
+            __split = mlable.layers.shaping.Divide(
+                axis=-1,
+                factor=max(1, self._config['group_dim']),
+                insert=bool(self._config['group_dim'] > 1),
+                right=bool(self._config['group_dim'] > 1))
+            # (B, T, G) => (B, T, G, E)
+            __embed = torch.nn.Embedding(
+                num_embeddings=self._config['vocab_dim'],
+                embedding_dim=self._config['embed_dim'])
+            # (B, T, G, E) => (B, T, G*E)
+            __merge = mlable.layers.shaping.Merge(
+                axis=-1,
+                right=False)
             # (B, T, G*E) => (B, T, G*E)
-            __norm = mlable.layers.normalization.GroupNorm(
-                group_num=__group_dim,
-                group_axis=-1,
-                affine_opt=True)
+            __norm = torch.nn.RMSNorm(
+                normalized_shape=(__embed_dim,),
+                elementwise_affine=True)
             # (B, T, G*E) => (B, T, G*E)
             __expand = torch.nn.Linear(
                 in_features=__embed_dim,
@@ -90,11 +97,8 @@ class CompositeBytePrefix(torch.nn.Module):
                 in_features=__embed_dim,
                 out_features=__latent_dim,
                 bias=True)
-            # build the lazy layers
-            __embed.build(shape=shape, dtype=dtype, device=device)
-            __norm.build(shape=__embed.output_shape(shape), dtype=dtype, device=device)
             # chain together the layers
-            self._layers = torch.nn.Sequential(__embed, __norm, __expand, __silu, __project)
+            self._layers = torch.nn.Sequential(__split, __embed, __merge, __norm, __expand, __silu, __project)
             # move to the target device at build time (no-op if device is None)
             self._layers = self._layers.to(device=device, dtype=dtype)
             # register the build
