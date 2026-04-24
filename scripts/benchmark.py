@@ -32,7 +32,6 @@ Reports:
 """
 
 import contextlib
-import functools
 import os
 
 import datasets
@@ -40,7 +39,6 @@ import huggingface_hub
 import torch
 import torch.amp
 import torch.nn
-import torch.nn.functional
 import torch.utils.tensorboard
 import transformers
 
@@ -75,7 +73,7 @@ DATASET_CFG = {
     'path': 'wikimedia/wikipedia',
     'name': '20231101.en',
     'split': 'train[90%:]',  # bounded, reproducible eval split
-    'streaming': False,}
+    'streaming': True,}
 
 BATCH_CFG = {
     'batch_dim': MAIN_CFG['batch_dim'],
@@ -146,7 +144,7 @@ print('[init] downloading the dataset...')
 DATASET_OBJ = datasets.load_dataset(**DATASET_CFG)
 
 print('[init] shuffling the dataset...')
-DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed_num'])
+DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed_num'], buffer_size=1000)
 
 # TOKENIZERS ###################################################################
 
@@ -185,60 +183,33 @@ print(f'[init] loading the prefix from {CHECKPOINT_CFG["path"]}...')
 PREFIX_MOD = deformers.pipelines.eval.load_prefix_checkpoint(**CHECKPOINT_CFG)
 PREFIX_MOD.eval()
 
-# UTILITIES ####################################################################
-
-# partial for index-based preprocessing (aligned with training pipeline)
-vectorize = functools.partial(
-    deformers.pipelines.prefix.tensors_from_indices,
-    text_tok=TEXT_TOK,
-    byte_tok=BYTE_TOK,
-    dtype_obj=torch.long,
-    sequence_dim=BATCH_CFG['sequence_dim'],
-    patch_dim=BATCH_CFG['patch_dim'],
-    device_str=MAIN_CFG['device_str'],
-    left_pad=True)
-
-def embed(
-    indices_arr: torch.Tensor,
-    model_obj: object=SOURCE_MOD,
-) -> torch.Tensor:
-    return model_obj.model.embed_tokens(indices_arr)
-
-def forward(
-    embeds_arr: torch.Tensor,
-    mask_arr: torch.Tensor,
-    model_obj: object=SOURCE_MOD,
-) -> torch.Tensor:
-    return model_obj.model(
-        inputs_embeds=embeds_arr,
-        attention_mask=mask_arr,
-        use_cache=False).last_hidden_state
-
 # LOGGING ######################################################################
 
 print(f'[init] opening TensorBoard writer at {LOGGING_CFG["log_dir"]}...')
 LOG_TB = torch.utils.tensorboard.SummaryWriter(log_dir=LOGGING_CFG['log_dir'])
 
-# ACCUMULATORS #################################################################
+# STATE ########################################################################
 
-__n_batches = 0
-__sum_embed_mse = 0.0
-__sum_embed_cos = 0.0
-__sum_hidden_mse = 0.0
-__sum_hidden_cos = 0.0
-__sum_kl = 0.0
-__sum_top1 = 0.0
-__sum_topk_set = 0.0
-__sum_topk_ord = 0.0
+__k_str = str(EVAL_CFG['topk_num'])
+__step = -1
+__state = {
+    'embed/mse': 0.0,
+    'embed/cosine': 0.0,
+    'hidden/mse': 0.0,
+    'hidden/cosine': 0.0,
+    'logit/kl': 0.0,
+    'logit/top1': 0.0,
+    f'logit/top{__k_str}/set': 0.0,
+    f'logit/top{__k_str}/ordered': 0.0,}
 
 # EVALUATION LOOP ##############################################################
 
 print(f'[eval] starting evaluation over {EVAL_CFG["batch_num"]} batches...')
-__dataset = DATASET_OBJ.iter(batch_size=BATCH_CFG['batch_dim'])
 
-for __batch in __dataset:
-    if __n_batches >= EVAL_CFG['batch_num']:
-        break
+for __step, __batch in enumerate(
+        DATASET_OBJ
+        .take(EVAL_CFG['batch_num'] * BATCH_CFG['batch_dim'])
+        .iter(batch_size=BATCH_CFG['batch_dim'])):
 
     # mask (B, T), tokens (B, T), bytes (B, T, G)
     __mask_arr, __indices_arr, __bytes_arr = deformers.pipelines.prefix.tensors_from_strings(
@@ -252,92 +223,95 @@ for __batch in __dataset:
         left_pad=True)
 
     with torch.no_grad():
-        # teacher forward: original embeddings -> hidden states -> logits
-        __teacher_embeds = embed(__indices_arr)
-        __teacher_hidden = forward(__teacher_embeds, __mask_arr)
-        __teacher_logits = SOURCE_MOD.lm_head(__teacher_hidden)
-
-        # student forward: bytes -> prefix -> inputs_embeds -> trunk -> logits
+        # teacher: one call gives embeddings, hidden states, and logits
+        __teacher_out = SOURCE_MOD(
+            input_ids=__indices_arr,
+            attention_mask=__mask_arr,
+            output_hidden_states=True,
+            use_cache=False)
+        # student: prefix produces embeddings; trunk produces hidden states and logits
         with MIXED_CTX:
-            __student_embeds = PREFIX_MOD(__bytes_arr).to(dtype=__teacher_embeds.dtype)
-        __student_hidden = forward(__student_embeds, __mask_arr)
-        __student_logits = SOURCE_MOD.lm_head(__student_hidden)
+            __student_embeds = PREFIX_MOD(__bytes_arr)
+        __student_out = SOURCE_MOD(
+            inputs_embeds=__student_embeds.to(dtype=__teacher_out.hidden_states[0].dtype),
+            attention_mask=__mask_arr,
+            output_hidden_states=True,
+            use_cache=False)
 
     # accumulate masked metrics
-    __sum_embed_mse += mlable.losses.mse_loss(
+    __state['embed/mse'] += mlable.losses.mse_loss(
         predict_arr=__student_embeds.float(),
-        target_arr=__teacher_embeds.float(),
+        target_arr=__teacher_out.hidden_states[0].float(),
         mask_arr=__mask_arr).item()
-    __sum_embed_cos += deformers.pipelines.eval.masked_cosine(
-        __student_embeds.float(), __teacher_embeds.float(), __mask_arr).item()
-    __sum_hidden_mse += mlable.losses.mse_loss(
-        predict_arr=__student_hidden.float(),
-        target_arr=__teacher_hidden.float(),
+    __state['embed/cosine'] += deformers.pipelines.eval.masked_cosine(
+        predict_arr=__student_embeds.float(),
+        target_arr=__teacher_out.hidden_states[0].float(),
         mask_arr=__mask_arr).item()
-    __sum_hidden_cos += deformers.pipelines.eval.masked_cosine(
-        __student_hidden.float(), __teacher_hidden.float(), __mask_arr).item()
-    __sum_kl += mlable.losses.kl_div(
-        predict_arr=__student_logits.float(),
-        target_arr=__teacher_logits.float(),
+    __state['hidden/mse'] += mlable.losses.mse_loss(
+        predict_arr=__student_out.hidden_states[-1].float(),
+        target_arr=__teacher_out.hidden_states[-1].float(),
         mask_arr=__mask_arr).item()
-    __sum_top1 += mlable.metrics.topk_rate(
-        predict_arr=__student_logits,
-        target_arr=__teacher_logits,
+    __state['hidden/cosine'] += deformers.pipelines.eval.masked_cosine(
+        predict_arr=__student_out.hidden_states[-1].float(),
+        target_arr=__teacher_out.hidden_states[-1].float(),
+        mask_arr=__mask_arr).item()
+    __state['logit/kl'] += mlable.losses.kl_div(
+        predict_arr=__student_out.logits.float(),
+        target_arr=__teacher_out.logits.float(),
+        mask_arr=__mask_arr).item()
+    __state['logit/top1'] += mlable.metrics.topk_rate(
+        predict_arr=__student_out.logits,
+        target_arr=__teacher_out.logits,
         mask_arr=__mask_arr,
         k_num=1).item()
-    __sum_topk_set += deformers.pipelines.eval.topk_set_rate(
-        student_arr=__student_logits,
-        teacher_arr=__teacher_logits,
+    __state[f'logit/top{__k_str}/set'] += deformers.pipelines.eval.topk_set_rate(
+        student_arr=__student_out.logits,
+        teacher_arr=__teacher_out.logits,
         mask_arr=__mask_arr,
         k_num=EVAL_CFG['topk_num']).item()
-    __sum_topk_ord += mlable.metrics.topk_rate(
-        predict_arr=__student_logits,
-        target_arr=__teacher_logits,
+    __state[f'logit/top{__k_str}/ordered'] += mlable.metrics.topk_rate(
+        predict_arr=__student_out.logits,
+        target_arr=__teacher_out.logits,
         mask_arr=__mask_arr,
         k_num=EVAL_CFG['topk_num']).item()
 
-    __n_batches += 1
-    if __n_batches % 4 == 0:
-        print(f'[eval] batch {__n_batches}/{EVAL_CFG["batch_num"]}')
+    if (__step + 1) % 4 == 0:
+        print(f'[eval] batch {__step + 1}/{EVAL_CFG["batch_num"]}')
 
 # SUMMARY ######################################################################
 
-__report = {}
-__k_str = str(EVAL_CFG['topk_num'])
+__n = max(1, __step + 1)
+__report = {
+    'batches': __n,
+    'embed/mse': __state['embed/mse'] / __n,
+    'embed/cosine': __state['embed/cosine'] / __n,
+    'hidden/mse': __state['hidden/mse'] / __n,
+    'hidden/cosine': __state['hidden/cosine'] / __n,
+    'logit/kl': __state['logit/kl'] / __n,
+    'logit/top1': __state['logit/top1'] / __n,
+    f'logit/top{__k_str}/set': __state[f'logit/top{__k_str}/set'] / __n,
+    f'logit/top{__k_str}/ordered': __state[f'logit/top{__k_str}/ordered'] / __n,}
 
-if __n_batches > 0:
-    __n = __n_batches
-    __report['eval'] = {
-        'batches': __n,
-        'embed_mse': __sum_embed_mse / __n,
-        'embed_cosine': __sum_embed_cos / __n,
-        'hidden_mse': __sum_hidden_mse / __n,
-        'hidden_cosine': __sum_hidden_cos / __n,
-        'kl_divergence': __sum_kl / __n,
-        'top1_rate': __sum_top1 / __n,
-        f'top{__k_str}_set': __sum_topk_set / __n,
-        f'top{__k_str}_ordered': __sum_topk_ord / __n,}
+print('\n[eval] === summary metrics ===')
+print(f'[eval] batches evaluated   : {__n}')
+print(f'[eval] embed MSE           : {__report["embed/mse"]:.6f}')
+print(f'[eval] embed cosine        : {__report["embed/cosine"]:.4f}')
+print(f'[eval] hidden MSE          : {__report["hidden/mse"]:.6f}')
+print(f'[eval] hidden cosine       : {__report["hidden/cosine"]:.4f}')
+print(f'[eval] KL divergence       : {__report["logit/kl"]:.6f}')
+print(f'[eval] top-1 match         : {__report["logit/top1"]:.4f}')
+print(f'[eval] top-{__k_str} set match    : {__report[f"logit/top{__k_str}/set"]:.4f}')
+print(f'[eval] top-{__k_str} order match  : {__report[f"logit/top{__k_str}/ordered"]:.4f}')
 
-    print('\n[eval] === summary metrics ===')
-    print(f'[eval] batches evaluated   : {__n}')
-    print(f'[eval] embed MSE           : {__report["eval"]["embed_mse"]:.6f}')
-    print(f'[eval] embed cosine        : {__report["eval"]["embed_cosine"]:.4f}')
-    print(f'[eval] hidden MSE          : {__report["eval"]["hidden_mse"]:.6f}')
-    print(f'[eval] hidden cosine       : {__report["eval"]["hidden_cosine"]:.4f}')
-    print(f'[eval] KL divergence       : {__report["eval"]["kl_divergence"]:.6f}')
-    print(f'[eval] top-1 match         : {__report["eval"]["top1_rate"]:.4f}')
-    print(f'[eval] top-{__k_str} set match    : {__report["eval"][f"top{__k_str}_set"]:.4f}')
-    print(f'[eval] top-{__k_str} order match  : {__report["eval"][f"top{__k_str}_ordered"]:.4f}')
-
-    # TensorBoard scalars under benchmark/*
-    LOG_TB.add_scalar('benchmark/embed_mse', __report['eval']['embed_mse'], 0)
-    LOG_TB.add_scalar('benchmark/embed_cosine', __report['eval']['embed_cosine'], 0)
-    LOG_TB.add_scalar('benchmark/hidden_mse', __report['eval']['hidden_mse'], 0)
-    LOG_TB.add_scalar('benchmark/hidden_cosine', __report['eval']['hidden_cosine'], 0)
-    LOG_TB.add_scalar('benchmark/kl_divergence', __report['eval']['kl_divergence'], 0)
-    LOG_TB.add_scalar('benchmark/top1_rate', __report['eval']['top1_rate'], 0)
-    LOG_TB.add_scalar(f'benchmark/top{__k_str}_set', __report['eval'][f'top{__k_str}_set'], 0)
-    LOG_TB.add_scalar(f'benchmark/top{__k_str}_ordered', __report['eval'][f'top{__k_str}_ordered'], 0)
+# TensorBoard scalars under benchmark/*
+LOG_TB.add_scalar('benchmark/embed/mse', __report['embed/mse'], 0)
+LOG_TB.add_scalar('benchmark/embed/cosine', __report['embed/cosine'], 0)
+LOG_TB.add_scalar('benchmark/hidden/mse', __report['hidden/mse'], 0)
+LOG_TB.add_scalar('benchmark/hidden/cosine', __report['hidden/cosine'], 0)
+LOG_TB.add_scalar('benchmark/logit/kl', __report['logit/kl'], 0)
+LOG_TB.add_scalar('benchmark/logit/top1', __report['logit/top1'], 0)
+LOG_TB.add_scalar(f'benchmark/logit/top{__k_str}/set', __report[f'logit/top{__k_str}/set'], 0)
+LOG_TB.add_scalar(f'benchmark/logit/top{__k_str}/ordered', __report[f'logit/top{__k_str}/ordered'], 0)
 
 # FIXED SENTENCE PROBE #########################################################
 
@@ -355,21 +329,26 @@ if EVAL_CFG['probe_sentences']:
         left_pad=True)
 
     with torch.no_grad():
-        __p_teacher_embeds = embed(__probe_tokens)
-        __p_teacher_hidden = forward(__p_teacher_embeds, __probe_mask)
-        __p_teacher_logits = SOURCE_MOD.lm_head(__p_teacher_hidden)
+        __p_teacher_out = SOURCE_MOD(
+            input_ids=__probe_tokens,
+            attention_mask=__probe_mask,
+            output_hidden_states=True,
+            use_cache=False)
         with MIXED_CTX:
-            __p_student_embeds = PREFIX_MOD(__probe_bytes).to(dtype=__p_teacher_embeds.dtype)
-        __p_student_hidden = forward(__p_student_embeds, __probe_mask)
-        __p_student_logits = SOURCE_MOD.lm_head(__p_student_hidden)
+            __p_student_embeds = PREFIX_MOD(__probe_bytes)
+        __p_student_out = SOURCE_MOD(
+            inputs_embeds=__p_student_embeds.to(dtype=__p_teacher_out.hidden_states[0].dtype),
+            attention_mask=__probe_mask,
+            output_hidden_states=True,
+            use_cache=False)
 
     __k = EVAL_CFG['topk_num']
     __probe_report = []
     for __i, __sent in enumerate(EVAL_CFG['probe_sentences']):
         # report at the last real token position
         __pos = int(__probe_mask[__i].sum().item()) - 1
-        __t_top = __p_teacher_logits[__i, __pos].topk(__k).indices.tolist()
-        __s_top = __p_student_logits[__i, __pos].topk(__k).indices.tolist()
+        __t_top = __p_teacher_out.logits[__i, __pos].topk(__k).indices.tolist()
+        __s_top = __p_student_out.logits[__i, __pos].topk(__k).indices.tolist()
         __t_toks = TEXT_TOK.convert_ids_to_tokens(__t_top)
         __s_toks = TEXT_TOK.convert_ids_to_tokens(__s_top)
         print(f'[eval] sentence {__i}: "{__sent[:60]}"')
@@ -399,36 +378,53 @@ if EVAL_CFG['vocab_probe']:
         sequence_dim=BATCH_CFG['sequence_dim'])
 
     # mask (B, T), tokens (B, T), bytes (B, T, G)
-    __vocab_mask, __vocab_ids, __vocab_bytes = vectorize(__probe_indices)
+    __vocab_mask, __vocab_ids, __vocab_bytes = deformers.pipelines.prefix.tensors_from_indices(
+        indices_arr=__probe_indices,
+        text_tok=TEXT_TOK,
+        byte_tok=BYTE_TOK,
+        dtype_obj=torch.long,
+        sequence_dim=BATCH_CFG['sequence_dim'],
+        patch_dim=BATCH_CFG['patch_dim'],
+        device_str=MAIN_CFG['device_str'],
+        left_pad=True)
 
     with torch.no_grad():
-        __v_teacher_embeds = embed(__vocab_ids)
-        __v_teacher_hidden = forward(__v_teacher_embeds, __vocab_mask)
-        __v_teacher_logits = SOURCE_MOD.lm_head(__v_teacher_hidden)
+        __v_teacher_out = SOURCE_MOD(
+            input_ids=__vocab_ids,
+            attention_mask=__vocab_mask,
+            output_hidden_states=True,
+            use_cache=False)
         with MIXED_CTX:
-            __v_student_embeds = PREFIX_MOD(__vocab_bytes).to(dtype=__v_teacher_embeds.dtype)
-        __v_student_hidden = forward(__v_student_embeds, __vocab_mask)
-        __v_student_logits = SOURCE_MOD.lm_head(__v_student_hidden)
+            __v_student_embeds = PREFIX_MOD(__vocab_bytes)
+        __v_student_out = SOURCE_MOD(
+            inputs_embeds=__v_student_embeds.to(dtype=__v_teacher_out.hidden_states[0].dtype),
+            attention_mask=__vocab_mask,
+            output_hidden_states=True,
+            use_cache=False)
 
     __v_embed_mse = mlable.losses.mse_loss(
         predict_arr=__v_student_embeds.float(),
-        target_arr=__v_teacher_embeds.float(),
+        target_arr=__v_teacher_out.hidden_states[0].float(),
         mask_arr=__vocab_mask).item()
     __v_embed_cos = deformers.pipelines.eval.masked_cosine(
-        __v_student_embeds.float(), __v_teacher_embeds.float(), __vocab_mask).item()
+        predict_arr=__v_student_embeds.float(),
+        target_arr=__v_teacher_out.hidden_states[0].float(),
+        mask_arr=__vocab_mask).item()
     __v_hidden_mse = mlable.losses.mse_loss(
-        predict_arr=__v_student_hidden.float(),
-        target_arr=__v_teacher_hidden.float(),
+        predict_arr=__v_student_out.hidden_states[-1].float(),
+        target_arr=__v_teacher_out.hidden_states[-1].float(),
         mask_arr=__vocab_mask).item()
     __v_hidden_cos = deformers.pipelines.eval.masked_cosine(
-        __v_student_hidden.float(), __v_teacher_hidden.float(), __vocab_mask).item()
+        predict_arr=__v_student_out.hidden_states[-1].float(),
+        target_arr=__v_teacher_out.hidden_states[-1].float(),
+        mask_arr=__vocab_mask).item()
     __v_kl = mlable.losses.kl_div(
-        predict_arr=__v_student_logits.float(),
-        target_arr=__v_teacher_logits.float(),
+        predict_arr=__v_student_out.logits.float(),
+        target_arr=__v_teacher_out.logits.float(),
         mask_arr=__vocab_mask).item()
     __v_top1 = mlable.metrics.topk_rate(
-        predict_arr=__v_student_logits,
-        target_arr=__v_teacher_logits,
+        predict_arr=__v_student_out.logits,
+        target_arr=__v_teacher_out.logits,
         mask_arr=__vocab_mask,
         k_num=1).item()
 
@@ -440,20 +436,20 @@ if EVAL_CFG['vocab_probe']:
     print(f'[eval] vocab top-1         : {__v_top1:.4f}')
 
     # TensorBoard scalars
-    LOG_TB.add_scalar('benchmark/vocab_embed_mse', __v_embed_mse, 0)
-    LOG_TB.add_scalar('benchmark/vocab_embed_cosine', __v_embed_cos, 0)
-    LOG_TB.add_scalar('benchmark/vocab_hidden_mse', __v_hidden_mse, 0)
-    LOG_TB.add_scalar('benchmark/vocab_hidden_cosine', __v_hidden_cos, 0)
-    LOG_TB.add_scalar('benchmark/vocab_kl', __v_kl, 0)
-    LOG_TB.add_scalar('benchmark/vocab_top1', __v_top1, 0)
+    LOG_TB.add_scalar('benchmark/vocab/embed/mse', __v_embed_mse, 0)
+    LOG_TB.add_scalar('benchmark/vocab/embed/cosine', __v_embed_cos, 0)
+    LOG_TB.add_scalar('benchmark/vocab/hidden/mse', __v_hidden_mse, 0)
+    LOG_TB.add_scalar('benchmark/vocab/hidden/cosine', __v_hidden_cos, 0)
+    LOG_TB.add_scalar('benchmark/vocab/logit/kl', __v_kl, 0)
+    LOG_TB.add_scalar('benchmark/vocab/logit/top1', __v_top1, 0)
 
     __report['vocab_probe'] = {
-        'embed_mse': __v_embed_mse,
-        'embed_cosine': __v_embed_cos,
-        'hidden_mse': __v_hidden_mse,
-        'hidden_cosine': __v_hidden_cos,
-        'kl_divergence': __v_kl,
-        'top1_rate': __v_top1,}
+        'embed/mse': __v_embed_mse,
+        'embed/cosine': __v_embed_cos,
+        'hidden/mse': __v_hidden_mse,
+        'hidden/cosine': __v_hidden_cos,
+        'logit/kl': __v_kl,
+        'logit/top1': __v_top1,}
 
     # PER-TOKEN INSPECTION TABLE ###############################################
 
@@ -461,11 +457,11 @@ if EVAL_CFG['vocab_probe']:
     __token_table = deformers.pipelines.eval.per_token_metrics(
         token_ids_arr=__vocab_ids,
         student_embeds_arr=__v_student_embeds.float(),
-        teacher_embeds_arr=__v_teacher_embeds.float(),
-        student_hidden_arr=__v_student_hidden.float(),
-        teacher_hidden_arr=__v_teacher_hidden.float(),
-        student_logits_arr=__v_student_logits.float(),
-        teacher_logits_arr=__v_teacher_logits.float(),
+        teacher_embeds_arr=__v_teacher_out.hidden_states[0].float(),
+        student_hidden_arr=__v_student_out.hidden_states[-1].float(),
+        teacher_hidden_arr=__v_teacher_out.hidden_states[-1].float(),
+        student_logits_arr=__v_student_out.logits.float(),
+        teacher_logits_arr=__v_teacher_out.logits.float(),
         mask_arr=__vocab_mask)
 
     # aggregate statistics
