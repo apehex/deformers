@@ -41,6 +41,8 @@ class CompositeBytePrefix(torch.nn.Module):
         vocab_dim: int=256,
         latent_dim: int=-1,
         group_dim: int=-1,
+        norm_opt: bool=True,
+        attn_opt: bool=True,
         **kwargs: dict,
     ) -> None:
         super(CompositeBytePrefix, self).__init__(**kwargs)
@@ -49,7 +51,9 @@ class CompositeBytePrefix(torch.nn.Module):
             'embed_dim': int(embed_dim),
             'vocab_dim': int(vocab_dim),
             'latent_dim': int(latent_dim),
-            'group_dim': int(group_dim),}
+            'group_dim': int(group_dim),
+            'norm_opt': bool(norm_opt),
+            'attn_opt': bool(attn_opt),}
         # submodule, initialized on first forward call
         self._layers = None
         self._built = False
@@ -61,6 +65,7 @@ class CompositeBytePrefix(torch.nn.Module):
         dtype: object=None,
     ) -> None:
         if not self._built:
+            __layers = []
             # actual group dimension: last dim of input when not configured
             __group_dim = shape[-1] if (self._config['group_dim'] < 1) else self._config['group_dim']
             # merged byte embedding dimension after CompositeEmbedding
@@ -68,37 +73,45 @@ class CompositeBytePrefix(torch.nn.Module):
             # projection target dimension: defaults to merged embed dim
             __latent_dim = __embed_dim if (self._config['latent_dim'] < 1) else self._config['latent_dim']
             # divide only if necessary (B, T*G) => (B, T, G) or (B, T, G) => (B, T, G)
-            __split = mlable.layers.shaping.Divide(
+            __layers.append(mlable.layers.shaping.Divide(
                 axis=-1,
                 factor=max(1, self._config['group_dim']),
                 insert=bool(self._config['group_dim'] > 1),
-                right=bool(self._config['group_dim'] > 1))
+                right=bool(self._config['group_dim'] > 1)))
             # (B, T, G) => (B, T, G, E)
-            __embed = torch.nn.Embedding(
+            __layers.append(torch.nn.Embedding(
                 num_embeddings=self._config['vocab_dim'],
-                embedding_dim=self._config['embed_dim'])
+                embedding_dim=self._config['embed_dim']))
+            # (B, T, G, E) => (B, T, G, E)
+            if self._config['attn_opt']:
+                __layers.append(torch.nn.MultiheadAttention(
+                    embed_dim=self._config['embed_dim'],
+                    num_heads=4,
+                    batch_first=True,
+                    bias=True))
             # (B, T, G, E) => (B, T, G*E)
-            __merge = mlable.layers.shaping.Merge(
+            __layers.append(mlable.layers.shaping.Merge(
                 axis=-1,
-                right=False)
+                right=False))
             # (B, T, G*E) => (B, T, G*E)
-            __norm = torch.nn.RMSNorm(
-                normalized_shape=(__embed_dim,),
-                elementwise_affine=True)
+            if self._config['norm_opt']:
+                __layers.append(torch.nn.RMSNorm(
+                    normalized_shape=(__embed_dim,),
+                    elementwise_affine=True))
             # (B, T, G*E) => (B, T, G*E)
-            __expand = torch.nn.Linear(
+            __layers.append(torch.nn.Linear(
                 in_features=__embed_dim,
                 out_features=__embed_dim,
-                bias=True)
+                bias=True))
             # (B, T, G*E) => (B, T, G*E)
-            __silu = torch.nn.SiLU()
+            __layers.append(torch.nn.SiLU())
             # (B, T, G*E) => (B, T, H)
-            __project = torch.nn.Linear(
+            __layers.append(torch.nn.Linear(
                 in_features=__embed_dim,
                 out_features=__latent_dim,
-                bias=True)
+                bias=True))
             # chain together the layers
-            self._layers = torch.nn.Sequential(__split, __embed, __merge, __norm, __expand, __silu, __project)
+            self._layers = torch.nn.Sequential(*__layers)
             # move to the target device at build time (no-op if device is None)
             self._layers = self._layers.to(device=device, dtype=dtype)
             # register the build
