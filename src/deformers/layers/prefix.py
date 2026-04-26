@@ -205,6 +205,62 @@ class ByteMixer(torch.nn.Module):
     def from_config(cls, config: dict, **kwargs: dict) -> torch.nn.Module:
         return cls(**{**config, **kwargs})
 
+# TOKEN ########################################################################
+
+class TokenProjector(torch.nn.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        output_dim: int,
+        **kwargs: dict,
+    ) -> None:
+        super(TokenProjector, self).__init__(**kwargs)
+        # save for import, export, duplication etc
+        self._config = {
+            'hidden_dim': int(hidden_dim),
+            'output_dim': int(output_dim),}
+        # build at runtime
+        self._norm = None
+        self._project = None
+        self._built = False
+
+    def build(
+        self,
+        shape: tuple,
+        device: object=None,
+        dtype: object=None,
+    ) -> None:
+        # lazy build at runtime
+        if not self._built:
+            # normalize the composite embedding
+            self._norm = torch.nn.RMSNorm(
+                normalized_shape=(int(shape[-1]),),
+                elementwise_affine=True).to(dtype=dtype, device=device)
+            # project the composite embedding into the teacher's space
+            self._project = mlable.layers.transformer.GatedLinearUnit(
+                hidden_dim=self._config['hidden_dim'],
+                output_dim=self._config['output_dim'])
+            # create the weights according to the inputs' shape
+            self._project.build(shape=shape, dtype=dtype, device=device)
+            # register
+            self._built = True
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        # lazy build, if necessary
+        self.build(shape=tuple(inputs.shape), dtype=inputs.dtype, device=inputs.dtype)
+        # (B, T, G*E) => (B, T, H)
+        return self._project(self._norm(inputs))
+
+    def output_shape(self, shape: tuple) -> tuple:
+        return self._project.output_shape(shape)
+
+    def get_config(self) -> dict:
+        return dict(self._config)
+
+    @classmethod
+    def from_config(cls, config: dict, **kwargs: dict) -> torch.nn.Module:
+        return cls(**{**config, **kwargs})
+
 # BYTE #########################################################################
 
 class CompositeBytePrefix(torch.nn.Module):
