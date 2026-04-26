@@ -63,7 +63,7 @@ class ByteEncoder(torch.nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         # the inputs are supposed to be integers so default to float32
-        self.build(shape=tuple(inputs.shape), dtype=torch.float32, device=inputs.dtype)
+        self.build(shape=tuple(inputs.shape), dtype=torch.float32, device=inputs.device)
         # (B, T*G) => (B, T, G) => (B, T, G, E) => (B, T, G, E)
         return self._position(self._value(inputs.to(dtype=torch.long)))
 
@@ -115,7 +115,7 @@ class ByteTransformer(torch.nn.Module):
                 head_num=self._config['head_num'],
                 dropout_rate=self._config['dropout_rate'],
                 attention_idx=-2,
-                bias_opt=True)
+                affine_opt=True)
             # pre-MLP norm
             self._norm1 = torch.nn.RMSNorm(
                 normalized_shape=(int(shape[-1]),),
@@ -123,7 +123,8 @@ class ByteTransformer(torch.nn.Module):
             # MLP gate
             self._gate = mlable.layers.transformer.GatedLinearUnit(
                 hidden_dim=int(shape[-1]),
-                output_dim=int(shape[-1]))
+                output_dim=int(shape[-1]),
+                affine_opt=False)
             # create all the weights, the same shape is kept throughout
             self._attend.build(shape=shape, dtype=dtype, device=device)
             self._gate.build(shape=shape, dtype=dtype, device=device)
@@ -132,7 +133,7 @@ class ByteTransformer(torch.nn.Module):
 
     def forward(self, inputs: torch.Tensor, paddings: torch.Tensor=None, causal: bool=False) -> torch.Tensor:
         # lazy build, if necessary
-        self.build(shape=tuple(inputs.shape), dtype=inputs.dtype, device=inputs.dtype)
+        self.build(shape=tuple(inputs.shape), dtype=inputs.dtype, device=inputs.device)
         # attention on the sequence of bytes (single token at once)
         __outputs = inputs + self._attend(inputs=self._norm0(inputs), paddings=paddings, is_causal=causal)
         # select the relevant data with the gate
@@ -187,7 +188,7 @@ class ByteMixer(torch.nn.Module):
 
     def forward(self, inputs: torch.Tensor, paddings: torch.Tensor) -> torch.Tensor:
         # lazy build, if necessary
-        self.build(shape=tuple(inputs.shape), dtype=inputs.dtype, device=inputs.dtype)
+        self.build(shape=tuple(inputs.shape), dtype=inputs.dtype, device=inputs.device)
         # invert the padding mask and make sure it is in the right dtype (B, T, G)
         __mask = (~paddings.to(dtype=torch.bool)).to(dtype=torch.long)
         # embed the length of each token, in bytes (B, T, G) => (B, T, G*E)
@@ -239,7 +240,8 @@ class TokenProjector(torch.nn.Module):
             # project the composite embedding into the teacher's space
             self._project = mlable.layers.transformer.GatedLinearUnit(
                 hidden_dim=self._config['hidden_dim'],
-                output_dim=self._config['output_dim'])
+                output_dim=self._config['output_dim'],
+                affine_opt=True)
             # create the weights according to the inputs' shape
             self._project.build(shape=shape, dtype=dtype, device=device)
             # register
@@ -247,7 +249,7 @@ class TokenProjector(torch.nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         # lazy build, if necessary
-        self.build(shape=tuple(inputs.shape), dtype=inputs.dtype, device=inputs.dtype)
+        self.build(shape=tuple(inputs.shape), dtype=inputs.dtype, device=inputs.device)
         # (B, T, G*E) => (B, T, H)
         return self._project(self._norm(inputs))
 
