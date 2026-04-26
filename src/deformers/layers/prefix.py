@@ -1,4 +1,5 @@
 import os.path
+import math
 
 import torch
 import torch.nn
@@ -139,6 +140,63 @@ class ByteTransformer(torch.nn.Module):
 
     def output_shape(self, shape: tuple) -> tuple:
         return tuple(shape)
+
+    def get_config(self) -> dict:
+        return dict(self._config)
+
+    @classmethod
+    def from_config(cls, config: dict, **kwargs: dict) -> torch.nn.Module:
+        return cls(**{**config, **kwargs})
+
+# MIXING #######################################################################
+
+class ByteMixer(torch.nn.Module):
+    def __init__(
+        self,
+        **kwargs: dict,
+    ) -> None:
+        super(ByteMixer, self).__init__(**kwargs)
+        # save for import, export, duplication etc
+        self._config = {}
+        # build at runtime
+        self._flatten = None
+        self._measure = None
+        self._built = False
+
+    def build(
+        self,
+        shape: tuple,
+        device: object=None,
+        dtype: object=None,
+    ) -> None:
+        # lazy build at runtime
+        if not self._built:
+            # parse the input shape
+            __patch_dim = int(shape[-2])
+            __output_dim = math.prod(tuple(shape[-2:]))
+            # flatten the sequence of byte vectors
+            self._flatten = mlable.layers.shaping.Merge(
+                axis=-1,
+                right=False)
+            # encode the length of each token, in bytes
+            self._measure = torch.nn.Embedding(
+                num_embeddings=__patch_dim, # maximum length
+                embedding_dim=__output_dim).to(dtype=dtype, device=device)
+            # register
+            self._built = True
+
+    def forward(self, inputs: torch.Tensor, paddings: torch.Tensor) -> torch.Tensor:
+        # lazy build, if necessary
+        self.build(shape=tuple(inputs.shape), dtype=inputs.dtype, device=inputs.dtype)
+        # invert the padding mask and make sure it is in the right dtype (B, T, G)
+        __mask = (~paddings.to(dtype=torch.bool)).to(dtype=torch.long)
+        # embed the length of each token, in bytes (B, T, G) => (B, T, G*E)
+        __outputs = self._measure(__mask.sum(dim=-1))
+        # merge all the byte vectors (B, T, G, E) => (B, T, G*E)
+        return __outputs + self._flatten(inputs)
+
+    def output_shape(self, shape: tuple) -> tuple:
+        return self._flatten.output_shape(shape)
 
     def get_config(self) -> dict:
         return dict(self._config)
