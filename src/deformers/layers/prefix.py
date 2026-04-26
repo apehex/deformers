@@ -6,6 +6,7 @@ import torch.nn
 import mlable.layers.embedding
 import mlable.layers.normalization
 import mlable.layers.shaping
+import mlable.layers.transformer
 
 # META #########################################################################
 
@@ -64,6 +65,77 @@ class ByteEncoder(torch.nn.Module):
         self.build(shape=tuple(inputs.shape), dtype=torch.float32, device=inputs.dtype)
         # (B, T*G) => (B, T, G) => (B, T, G, E) => (B, T, G, E)
         return self._position(self._value(inputs.to(dtype=torch.long)))
+
+    def output_shape(self, shape: tuple) -> tuple:
+        return tuple(shape)
+
+    def get_config(self) -> dict:
+        return dict(self._config)
+
+    @classmethod
+    def from_config(cls, config: dict, **kwargs: dict) -> torch.nn.Module:
+        return cls(**{**config, **kwargs})
+
+# TRANSFORMER ##################################################################
+
+class ByteTransformer(torch.nn.Module):
+    def __init__(
+        self,
+        head_num: int,
+        dropout_rate: float=0.0,
+        **kwargs: dict,
+    ) -> None:
+        super(ByteTransformer, self).__init__(**kwargs)
+        # save for import, export, duplication etc
+        self._config = {
+            'head_num': int(head_num),
+            'dropout_rate': float(dropout_rate),}
+        # build at runtime
+        self._norm0 = None
+        self._attend = None
+        self._norm1 = None
+        self._gate = None
+        self._built = False
+
+    def build(
+        self,
+        shape: tuple,
+        device: object=None,
+        dtype: object=None,
+    ) -> None:
+        # lazy build at runtime
+        if not self._built:
+            # pre-attention norm
+            self._norm0 = torch.nn.RMSNorm(
+                normalized_shape=(int(shape[-1]),),
+                elementwise_affine=True).to()
+            # non causal self-attention, with padding masked out
+            self._attend = mlable.layers.transformer.SelfAttention(
+                head_num=self._config['head_num'],
+                dropout_rate=self._config['dropout_rate'],
+                attention_idx=-2,
+                bias_opt=True)
+            # pre-MLP norm
+            self._norm1 = torch.nn.RMSNorm(
+                normalized_shape=(int(shape[-1]),),
+                elementwise_affine=True)
+            # MLP gate
+            self._gate = mlable.layers.transformer.GatedLinearUnit(
+                hidden_dim=int(shape[-1]),
+                output_dim=int(shape[-1]))
+            # create all the weights, the shape is kept throughout
+            self._attend.build(shape=shape, dtype=dtype, device=device)
+            self._gate.build(shape=shape, dtype=dtype, device=device)
+            # register
+            self._built = True
+
+    def forward(self, inputs: torch.Tensor, paddings: torch.Tensor, causal: bool=False) -> torch.Tensor:
+        # lazy build
+        self.build(shape=tuple(inputs.shape), dtype=inputs.dtype, device=inputs.dtype)
+        # attention on the sequence of bytes (single token at once)
+        __outputs = inputs + self._attend(inputs=self._norm0(inputs), paddings=paddings, is_causal=causal)
+        # select the relevant data with the gate
+        return __outputs + self._gate(self._norm1(__outputs))
 
     def output_shape(self, shape: tuple) -> tuple:
         return tuple(shape)
