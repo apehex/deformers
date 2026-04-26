@@ -109,7 +109,7 @@ class ByteTransformer(torch.nn.Module):
             # pre-attention norm
             self._norm0 = torch.nn.RMSNorm(
                 normalized_shape=(int(shape[-1]),),
-                elementwise_affine=True).to()
+                elementwise_affine=True).to(dtype=dtype, device=device)
             # non causal self-attention, with padding masked out
             self._attend = mlable.layers.transformer.SelfAttention(
                 head_num=self._config['head_num'],
@@ -119,7 +119,7 @@ class ByteTransformer(torch.nn.Module):
             # pre-MLP norm
             self._norm1 = torch.nn.RMSNorm(
                 normalized_shape=(int(shape[-1]),),
-                elementwise_affine=True)
+                elementwise_affine=True).to(dtype=dtype, device=device)
             # MLP gate
             self._gate = mlable.layers.transformer.GatedLinearUnit(
                 hidden_dim=int(shape[-1]),
@@ -174,7 +174,7 @@ class ByteMixer(torch.nn.Module):
             # parse the input shape
             __patch_dim = int(shape[-2])
             __output_dim = math.prod(tuple(shape[-2:]))
-            # flatten the sequence of byte vectors
+            # flatten the sequence of byte vectors (no weights)
             self._flatten = mlable.layers.shaping.Merge(
                 axis=-1,
                 right=False)
