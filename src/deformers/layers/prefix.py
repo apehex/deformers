@@ -18,17 +18,18 @@ class ByteEncoder(torch.nn.Module):
         self,
         embed_dim: int, # dimension of each byte embedding
         patch_dim: int=-1, # dimension of each byte group
+        vocab_dim: int=256, # meant to embed bytes
         padding_idx: int=128, # default padding value
-        **kwargs
+        **kwargs: dict,
     ) -> None:
         super(ByteEncoder, self).__init__(**kwargs)
         # save for import, export, duplication etc
         self._config = {
             'embed_dim': int(embed_dim),
             'patch_dim': int(patch_dim),
-            'padding_idx': int(padding_idx)}
+            'vocab_dim': int(vocab_dim),
+            'padding_idx': int(padding_idx),}
         # build at runtime
-        self._split = None
         self._value = None
         self._position = None
         self._built = False
@@ -41,25 +42,20 @@ class ByteEncoder(torch.nn.Module):
     ) -> None:
         # lazy build at runtime
         if not self._built:
-            __shape = tuple(shape)
-            # divide only if necessary (B, T*G) => (B, T, G) or (B, T, G) => (B, T, G)
-            self._split = mlable.layers.shaping.Divide(
-                axis=-1,
-                factor=max(1, self._config['patch_dim']),
-                insert=bool(self._config['patch_dim'] > 1),
-                right=bool(self._config['patch_dim'] > 1))
-            # byte value embedding (B, T, G) => (B, T, G, E)
-            self._value = torch.nn.Embedding(
-                num_embeddings=256,
-                embedding_dim=self._config['embed_dim'])
+            # divide only if necessary (B, T*G) => (B, T, G, 3) or (B, T, G) => (B, T, G, E)
+            self._value = mlable.layers.embedding.CompositeEmbedding(
+                input_dim=self._config['vocab_dim'],
+                output_dim=self._config['embed_dim'],
+                group_dim=self._config['patch_dim'],
+                # padding_idx=self._config['padding_idx'],
+                merge_axes=False)
             # byte position embedding (B, T, G, E) => (B, T, G, E)
             self._position = mlable.layers.embedding.PositionalEmbedding(
                 input_axis=-2,
                 output_axis=-1)
             # create all the weights according to the respective inputs' shape
-            for __l in [self._split, self._value, self._position]:
-                __l.build(shape=__shape, dtype=dtype, device=device)
-                __shape = __l.output_shape(__shape)
+            self._value.build(shape=shape, dtype=dtype, device=device)
+            self._position.build(shape=self._value.output_shape(shape), dtype=dtype, device=device)
             # register
             self._built = True
 
@@ -67,7 +63,7 @@ class ByteEncoder(torch.nn.Module):
         # the inputs are supposed to be integers so default to float32
         self.build(shape=tuple(inputs.shape), dtype=torch.float32, device=inputs.dtype)
         # (B, T*G) => (B, T, G) => (B, T, G, E) => (B, T, G, E)
-        return self._position(self._value(self._split(inputs.to(dtype=torch.long))))
+        return self._position(self._value(inputs.to(dtype=torch.long)))
 
     def output_shape(self, shape: tuple) -> tuple:
         return tuple(shape)
