@@ -67,7 +67,7 @@ class ByteEncoder(torch.nn.Module):
         return self._position(self._value(inputs.to(dtype=torch.long)))
 
     def output_shape(self, shape: tuple) -> tuple:
-        return tuple(shape)
+        return self._value.output_shape(shape)
 
     def get_config(self) -> dict:
         return dict(self._config)
@@ -123,14 +123,14 @@ class ByteTransformer(torch.nn.Module):
             self._gate = mlable.layers.transformer.GatedLinearUnit(
                 hidden_dim=int(shape[-1]),
                 output_dim=int(shape[-1]))
-            # create all the weights, the shape is kept throughout
+            # create all the weights, the same shape is kept throughout
             self._attend.build(shape=shape, dtype=dtype, device=device)
             self._gate.build(shape=shape, dtype=dtype, device=device)
             # register
             self._built = True
 
-    def forward(self, inputs: torch.Tensor, paddings: torch.Tensor, causal: bool=False) -> torch.Tensor:
-        # lazy build
+    def forward(self, inputs: torch.Tensor, paddings: torch.Tensor=None, causal: bool=False) -> torch.Tensor:
+        # lazy build, if necessary
         self.build(shape=tuple(inputs.shape), dtype=inputs.dtype, device=inputs.dtype)
         # attention on the sequence of bytes (single token at once)
         __outputs = inputs + self._attend(inputs=self._norm0(inputs), paddings=paddings, is_causal=causal)
