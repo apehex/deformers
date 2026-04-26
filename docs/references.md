@@ -2,8 +2,16 @@
 
 ## Models
 
-- https://huggingface.co/Qwen/Qwen3.5-9B
-- https://huggingface.co/Qwen/Qwen3.5-9B/raw/main/merges.txt
+- Qwen v3.5 9B:
+    - model: https://huggingface.co/Qwen/Qwen3.5-9B
+    - BPE merges: https://huggingface.co/Qwen/Qwen3.5-9B/raw/main/merges.txt
+- Nvidia Nemotron:
+    - v3:
+        - model: https://huggingface.co/collections/nvidia/nvidia-nemotron-v3
+        - paper: https://arxiv.org/abs/2512.20856
+    - Llama v3.1:
+        - model: https://huggingface.co/collections/nvidia/llama-nemotron
+        - paper https://arxiv.org/abs/2505.00949
 
 ## Key references
 
