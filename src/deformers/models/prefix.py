@@ -137,7 +137,7 @@ class CompositeBytePrefix(torch.nn.Module):
         # instantiate the model
         __prefix = cls.from_config(config=__ckpt['config'], **kwargs)
         # create the layers
-        __prefix.build(shape=shape, device=None, dtype=None)
+        __prefix.build(shape=shape, device=device, dtype=torch.float32)
         # load the weights
         __prefix.load_state_dict(__ckpt['state'])
         # alternative transformer prefix
