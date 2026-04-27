@@ -44,6 +44,7 @@ import mlable.models
 import mlable.schedulers
 import mlable.utils
 
+import deformers.datasets.random
 import deformers.models.generic
 import deformers.models.prefix
 import deformers.pipelines.eval
@@ -348,8 +349,7 @@ def format_state(state: dict) -> dict:
         'loss': f"(ema: {state['loss/ema']:.6f} total: {state['loss/total']:.6f} mse(0: {state['loss/mse/0']:.6f} k: {state['loss/mse/k']:.6f}) cos(0: {state['loss/cos/0']:.6f} k: {state['loss/cos/k']:.6f}))",
         'gradient': f"(rate: {state['gradient/rate']:.2e} norm: {state['gradient/norm']:.4f})",
         'iter': f"(time: {state['iter/time'] * 1000.0:.0f} tok/s: {state['iter/tps']:.0f})",
-        'vocab': f"(seen: {state['vocab/seen'] * 100.0:.1f}% max: {state['vocab/max'] * 100.0:.1f}%)",
-        }
+        'vocab': f"(seen: {state['vocab/seen'] * 100.0:.1f}% max: {state['vocab/max'] * 100.0:.1f}%)",}
 
 # TESTING ######################################################################
 
