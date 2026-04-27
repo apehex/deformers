@@ -303,18 +303,8 @@ OPTIMIZER_OBJ.zero_grad()
 
 print('[init] creating specialized utilities...')
 
-# vectorize_strings = functools.partial(
-#     deformers.pipelines.prefix.tensors_from_strings,
-#     text_tok=TEXT_TOK,
-#     byte_tok=BYTE_TOK,
-#     dtype_obj=torch.long,
-#     sequence_dim=BATCH_CFG['sequence_dim'],
-#     patch_dim=BATCH_CFG['patch_dim'],
-#     device_str=MAIN_CFG['device_str'],
-#     left_pad=True)
-
 vectorize = functools.partial(
-    deformers.pipelines.prefix.tensors_from_indices,
+    deformers.pipelines.prefix.vectorize_indices,
     text_tok=TEXT_TOK,
     byte_tok=BYTE_TOK,
     dtype_obj=torch.long,

@@ -6,7 +6,7 @@ import deformers.pipelines.patch
 
 # PREPROCESSING ################################################################
 
-def tensors_from_strings(
+def vectorize_strings(
     text_arr: list[str],
     text_tok: object,
     byte_tok: object,
@@ -39,7 +39,7 @@ def tensors_from_strings(
     # (B, T), (B, T), (B, T, G)
     return __mask_arr, __indices_arr, __bytes_arr
 
-def tensors_from_indices(
+def vectorize_indices(
     indices_arr: list[list[int]],
     text_tok: object,
     byte_tok: object,
