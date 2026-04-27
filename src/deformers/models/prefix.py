@@ -64,11 +64,11 @@ class CompositeBytePrefix(torch.nn.Module):
                 vocab_dim=self._config['vocab_dim'],
                 padding_idx=self._config['padding_idx'])
             # model the interactions between the bytes, iteratively
-            self._blocks = [
+            self._blocks = torch.nn.ModuleList([
                 deformers.layers.prefix.ByteTransformer(
                     head_num=self._config['head_num'],
                     dropout_rate=self._config['dropout_rate'])
-                for _ in range(self._config['block_num'])]
+                for _ in range(self._config['block_num'])])
             # combine all the byte vectors into a single token vector
             self._combine = deformers.layers.prefix.ByteMixer()
             # project into the latent space of the teacher model
