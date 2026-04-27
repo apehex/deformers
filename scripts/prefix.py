@@ -44,8 +44,8 @@ import mlable.models
 import mlable.schedulers
 import mlable.utils
 
-import deformers.layers.prefix
 import deformers.models.generic
+import deformers.models.prefix
 import deformers.pipelines.eval
 import deformers.pipelines.monitor
 import deformers.pipelines.patch
@@ -126,9 +126,14 @@ MODEL_CFG = {
 
 PREFIX_CFG = {
     'embed_dim': 256, # 32 * 256 = 8192
+    'patch_dim': -1,
+    'hidden_dim': -1,
+    'output_dim': 4096,
     'vocab_dim': 256,
-    'latent_dim': 4096,
-    'group_dim': -1,}
+    'padding_idx': 128,
+    'block_num': 4,
+    'head_num': 4,
+    'dropout_rate': 0.001,}
 
 # TRAINING CONFIG ##############################################################
 
@@ -256,9 +261,9 @@ SOURCE_MOD.eval()
 mlable.models.freeze(SOURCE_MOD)
 
 print('[init] creating the student...')
-PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
+PREFIX_MOD = deformers.models.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
 if MAIN_CFG['resume_opt'] and os.path.exists(CHECKPOINT_CFG['save_path']):
-    PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix.load_checkpoint(
+    PREFIX_MOD = deformers.models.prefix.CompositeBytePrefix.load_checkpoint(
         path=CHECKPOINT_CFG['save_path'],
         shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
         device=MAIN_CFG['device_str'])
