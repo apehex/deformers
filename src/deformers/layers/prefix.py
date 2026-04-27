@@ -103,7 +103,9 @@ class ByteTransformer(torch.nn.Module):
             # pre-attention norm
             self._norm0 = torch.nn.RMSNorm(
                 normalized_shape=(int(shape[-1]),),
-                elementwise_affine=True).to(dtype=dtype, device=device)
+                elementwise_affine=True,
+                dtype=dtype,
+                device=device)
             # non causal self-attention, with padding masked out
             self._attend = mlable.layers.transformer.SelfAttention(
                 head_num=self._config['head_num'],
@@ -113,7 +115,9 @@ class ByteTransformer(torch.nn.Module):
             # pre-MLP norm
             self._norm1 = torch.nn.RMSNorm(
                 normalized_shape=(int(shape[-1]),),
-                elementwise_affine=True).to(dtype=dtype, device=device)
+                elementwise_affine=True,
+                dtype=dtype,
+                device=device)
             # MLP gate
             self._gate = mlable.layers.transformer.GatedLinearUnit(
                 hidden_dim=int(shape[-1]),
@@ -176,7 +180,9 @@ class ByteMixer(torch.nn.Module):
             # encode the length of each token, in bytes
             self._measure = torch.nn.Embedding(
                 num_embeddings=__patch_dim + 1, # maximum length
-                embedding_dim=__output_dim).to(dtype=dtype, device=device)
+                embedding_dim=__output_dim,
+                dtype=dtype,
+                device=device)
             # register
             self._built = True
 
@@ -230,7 +236,9 @@ class TokenProjector(torch.nn.Module):
             # normalize the composite embedding
             self._norm = torch.nn.RMSNorm(
                 normalized_shape=(int(shape[-1]),),
-                elementwise_affine=True).to(dtype=dtype, device=device)
+                elementwise_affine=True,
+                dtype=dtype,
+                device=device)
             # project the composite embedding into the teacher's space
             self._project = mlable.layers.transformer.GatedLinearUnit(
                 hidden_dim=self._config['hidden_dim'],
