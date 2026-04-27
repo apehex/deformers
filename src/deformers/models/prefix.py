@@ -7,8 +7,7 @@ import deformers.layers.prefix
 
 # META #########################################################################
 
-SHAPE_MSG = 'Inputs must be rank {}, got shape={} with patch_dim={}.'
-PATH_MSG = 'No model checkpoint found at {path}.'
+PATH_MSG = 'No model checkpoint found at {}.'
 
 # BYTE #########################################################################
 
@@ -55,7 +54,7 @@ class CompositeBytePrefix(torch.nn.Module):
             __shape = tuple(shape)
             # compute the default dimensions
             __embed_dim = self._config['embed_dim']
-            __patch_dim = __shape[-1] if (self.config['patch_dim'] < 1) else self._config['patch_dim']
+            __patch_dim = __shape[-1] if (self._config['patch_dim'] < 1) else self._config['patch_dim']
             __output_dim = __embed_dim * __patch_dim if (self._config['output_dim'] < 1) else self._config['output_dim']
             __hidden_dim = __output_dim if (self._config['hidden_dim'] < 1) else self._config['hidden_dim']
             # value + position embedding of each byte
