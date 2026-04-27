@@ -161,8 +161,8 @@ SCHEDULER_CFG = { # counted in acc steps (not micro steps)
 LOSS_CFG = {
     'mse_0_rate': 10.0,
     'mse_k_rate': 1.0,
-    'kld_0_rate': 0.0,
-    'kld_k_rate': 0.0,}
+    'cos_0_rate': 0.0,
+    'cos_k_rate': 0.0,}
 
 # TESTING CONFIG ###############################################################
 
@@ -189,8 +189,8 @@ STATE_CFG = {
     'loss/total': lambda __x: 0.0,
     'loss/mse/0': lambda __x: 0.0,
     'loss/mse/k': lambda __x: 0.0,
-    'loss/kldiv/0': lambda __x: 0.0,
-    'loss/kldiv/k': lambda __x: 0.0,
+    'loss/cos/0': lambda __x: 0.0,
+    'loss/cos/k': lambda __x: 0.0,
     'vocab/seen': lambda __x: 0.0,
     'vocab/max': lambda __x: 0.0,
     'gpu/memory/allocated': lambda __x: 0.0,
@@ -345,7 +345,7 @@ def format_state(state: dict) -> dict:
         '': f"[{' '.join(state['switch/train'] * ['train'] + (not state['switch/train']) * ['test'] + state['switch/grad'] * ['grad'] + state['switch/log'] * ['log'] + state['switch/save'] * ['save'])}]",
         'epoch': f"({state['epoch/current']}/{state['epoch/total']})",
         'step': f"({state['step/current']}/{state['step/total']})",
-        'loss': f"(ema: {state['loss/ema']:.6f} total: {state['loss/total']:.6f} mse(0: {state['loss/mse/0']:.6f} k: {state['loss/mse/k']:.6f}) kl-div(0: {state['loss/kldiv/0']:.6f} k: {state['loss/kldiv/k']:.6f}))",
+        'loss': f"(ema: {state['loss/ema']:.6f} total: {state['loss/total']:.6f} mse(0: {state['loss/mse/0']:.6f} k: {state['loss/mse/k']:.6f}) cos(0: {state['loss/cos/0']:.6f} k: {state['loss/cos/k']:.6f}))",
         'gradient': f"(rate: {state['gradient/rate']:.2e} norm: {state['gradient/norm']:.4f})",
         'iter': f"(time: {state['iter/time'] * 1000.0:.0f} tok/s: {state['iter/tps']:.0f})",
         'vocab': f"(seen: {state['vocab/seen'] * 100.0:.1f}% max: {state['vocab/max'] * 100.0:.1f}%)",
@@ -417,8 +417,8 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         # the total loss is the average loss after N accumulation steps
         __state['loss/mse/0'] += __losses[0].item()
         __state['loss/mse/k'] += __losses[1].item()
-        __state['loss/kldiv/0'] += __losses[2].item()
-        __state['loss/kldiv/k'] += __losses[3].item()
+        __state['loss/cos/0'] += __losses[2].item()
+        __state['loss/cos/k'] += __losses[3].item()
         __state['loss/total'] += __losses[-1].item()
 
         # optimizer step after gradient accumulation
