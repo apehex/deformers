@@ -64,9 +64,6 @@ class ByteEncoder(torch.nn.Module):
     def output_shape(self, shape: tuple) -> tuple:
         return self._value.output_shape(shape)
 
-    def padding_shape(self, shape: tuple) -> tuple:
-        return self.output_shape(shape)[:-1]
-
     def get_config(self) -> dict:
         return dict(self._config)
 

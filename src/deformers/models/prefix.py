@@ -87,12 +87,12 @@ class CompositeBytePrefix(torch.nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         # the inputs are supposed to be integers, default to float32 weights
         self.build(shape=tuple(inputs.shape), dtype=torch.float32, device=inputs.device)
+        # embed the byte values and positions (B, T, G) or (B, T*G) => (B, T, G, E)
+        __outputs = self._embed(inputs)
         # identify the positions with padding (B, T, G) or (B, T*G)
         __paddings = (inputs == self._config['padding_idx']).to(dtype=torch.bool, device=inputs.device)
         # match the shape of the activations (B, T, G) or (B, T*G) => (B, T, G)
-        __paddings = __paddings.reshape(self._embed.padding_shape(inputs.shape))
-        # embed the byte values and positions (B, T, G) => (B, T, G, E)
-        __outputs = self._embed(inputs)
+        __paddings = __paddings.reshape(tuple(__outputs.shape)[:-1])
         # model the interactions between the bytes (B, T, G, E) => (B, T, G, E)
         for __i, __l in enumerate(self._blocks):
             # the first transformer block attends only to the non-padding bytes
