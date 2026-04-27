@@ -44,14 +44,14 @@ class ByteEncoder(torch.nn.Module):
     ) -> None:
         # lazy build at runtime
         if not self._built:
-            # divide only if necessary (B, T*G) => (B, T, G, 3) or (B, T, G) => (B, T, G, E)
+            # the embedding of the padding is still trained to become scratchpad
             self._value = mlable.layers.embedding.CompositeEmbedding(
                 input_dim=self._config['vocab_dim'],
                 output_dim=self._config['embed_dim'],
                 group_dim=self._config['patch_dim'],
                 # padding_idx=self._config['padding_idx'],
                 merge_axes=False)
-            # byte position embedding (B, T, G, E) => (B, T, G, E)
+            # byte position embedding
             self._position = mlable.layers.embedding.PositionalEmbedding(
                 input_axis=-2,
                 output_axis=-1)
@@ -131,11 +131,11 @@ class ByteTransformer(torch.nn.Module):
             # register
             self._built = True
 
-    def forward(self, inputs: torch.Tensor, paddings: torch.Tensor=None, causal: bool=False) -> torch.Tensor:
+    def forward(self, inputs: torch.Tensor, paddings: torch.Tensor=None) -> torch.Tensor:
         # lazy build, if necessary
         self.build(shape=tuple(inputs.shape), dtype=inputs.dtype, device=inputs.device)
         # attention on the sequence of bytes (single token at once)
-        __outputs = inputs + self._attend(inputs=self._norm0(inputs), paddings=paddings, is_causal=causal)
+        __outputs = inputs + self._attend(inputs=self._norm0(inputs), paddings=paddings, is_causal=False)
         # select the relevant data with the gate
         return __outputs + self._gate(self._norm1(__outputs))
 
@@ -181,7 +181,7 @@ class ByteMixer(torch.nn.Module):
                 right=False)
             # encode the length of each token, in bytes
             self._measure = torch.nn.Embedding(
-                num_embeddings=__patch_dim, # maximum length
+                num_embeddings=__patch_dim + 1, # maximum length
                 embedding_dim=__output_dim).to(dtype=dtype, device=device)
             # register
             self._built = True
