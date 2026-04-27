@@ -78,7 +78,7 @@ class CompositeBytePrefix(torch.nn.Module):
                 hidden_dim=__hidden_dim,
                 output_dim=__output_dim)
             # create the weights according to the inputs' shape
-            for __l in [self._embed] + self._blocks + [self._combine, self._project]:
+            for __l in [self._embed] + list(self._blocks) + [self._combine, self._project]:
                 __l.build(shape=__shape, dtype=dtype, device=device)
                 __shape = __l.output_shape(__shape)
             # register
