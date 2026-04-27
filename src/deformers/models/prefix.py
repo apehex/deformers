@@ -3,6 +3,8 @@ import os.path
 import torch
 import torch.nn
 
+import mlable.shapes
+
 import deformers.layers.prefix
 
 # META #########################################################################
@@ -15,9 +17,9 @@ class CompositeBytePrefix(torch.nn.Module):
     def __init__(
         self,
         embed_dim: int, # dimension of each byte embedding
+        output_dim: int, # dimension of the final output of the model
         patch_dim: int=-1, # split the sequence when patch is positive
         hidden_dim: int=-1, # defaults to the output dimension when -1
-        output_dim: int=-1, # defaults to G*E (patch * embed) when -1
         vocab_dim: int=256, # number of # byte values
         padding_idx: int=128, # default padding value
         block_num: int=4, # number of transformer blocks
@@ -29,9 +31,9 @@ class CompositeBytePrefix(torch.nn.Module):
         # save for import / export
         self._config = {
             'embed_dim': int(embed_dim),
+            'output_dim': int(output_dim),
             'patch_dim': int(patch_dim),
             'hidden_dim': int(hidden_dim),
-            'output_dim': int(output_dim),
             'vocab_dim': int(vocab_dim),
             'padding_idx': int(padding_idx),
             'block_num': int(block_num),
@@ -54,8 +56,8 @@ class CompositeBytePrefix(torch.nn.Module):
             __shape = tuple(shape)
             # compute the default dimensions
             __embed_dim = self._config['embed_dim']
+            __output_dim = self._config['output_dim']
             __patch_dim = __shape[-1] if (self._config['patch_dim'] < 1) else self._config['patch_dim']
-            __output_dim = __embed_dim * __patch_dim if (self._config['output_dim'] < 1) else self._config['output_dim']
             __hidden_dim = __output_dim if (self._config['hidden_dim'] < 1) else self._config['hidden_dim']
             # value + position embedding of each byte
             self._embed = deformers.layers.prefix.ByteEncoder(
@@ -100,12 +102,15 @@ class CompositeBytePrefix(torch.nn.Module):
         return self._project(__outputs)
 
     def output_shape(self, shape: tuple) -> tuple:
-        __shape = tuple(shape)
-        # (B, T, G) => (B, T, G, E) => (B, T, G*E) => (B, T, O)
-        for __l in [self._embed] + self._blocks + [self._combine, self._project]:
-            __shape = __l.output_shape(__shape)
-        # (B, T, O)
-        return __shape
+        # divide the sequence axis only if the patch dimension is meaningful
+        __shape = mlable.shapes.divide(
+            shape,
+            axis=1,
+            factor=max(1, self._config['patch_dim']),
+            insert=bool(self._config['patch_dim'] > 1),
+            right=bool(self._config['patch_dim'] > 1))
+        # the input shape is supposed to have rank 2 or 3
+        return tuple(__shape)[:2] + (self._config['output_dim'],)
 
     def get_config(self) -> dict:
         return dict(self._config)
