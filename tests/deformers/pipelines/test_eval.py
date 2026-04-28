@@ -344,10 +344,10 @@ class TestLoadPrefixCheckpoint:
                 device='cpu')
 
     def test_loads_valid_checkpoint(self, tmp_path):
-        import deformers.layers.prefix
+        import deformers.models.prefix
         # create a minimal prefix and save it
-        __prefix = deformers.layers.prefix.CompositeBytePrefix(
-            embed_dim=4, vocab_dim=256, latent_dim=8)
+        __prefix = deformers.models.prefix.CompositeBytePrefix(
+            embed_dim=4, vocab_dim=4, output_dim=8, block_num=1, head_num=1)
         __prefix.build(shape=(1, 2, 4), device='cpu')
         __ckpt_path = str(tmp_path / 'prefix.pt')
         __prefix.save_checkpoint(__ckpt_path)
@@ -356,4 +356,71 @@ class TestLoadPrefixCheckpoint:
             path=__ckpt_path,
             shape=(1, 2, 4),
             device='cpu')
-        assert isinstance(__loaded, deformers.layers.prefix.CompositeBytePrefix)
+        assert isinstance(__loaded, deformers.models.prefix.CompositeBytePrefix)
+
+# MODEL_SUMMARY ################################################################
+
+class TestModelSummary:
+
+    def _make_prefix(self):
+        import deformers.models.prefix
+        __prefix = deformers.models.prefix.CompositeBytePrefix(
+            embed_dim=4, vocab_dim=4, output_dim=8, block_num=1, head_num=1)
+        __prefix.build(shape=(1, 2, 4), device='cpu')
+        return __prefix
+
+    def test_returns_output_shape(self):
+        __prefix = self._make_prefix()
+        __out = deformers.pipelines.eval.model_summary(
+            model_obj=__prefix,
+            input_shape=(1, 2, 4))
+        # top-level output shape should match output_shape()
+        assert __out == __prefix.output_shape((1, 2, 4))
+
+    def test_returns_tuple(self):
+        __prefix = self._make_prefix()
+        __out = deformers.pipelines.eval.model_summary(
+            model_obj=__prefix,
+            input_shape=(1, 2, 4))
+        assert isinstance(__out, tuple)
+
+    def test_output_shape_rank(self):
+        __prefix = self._make_prefix()
+        __out = deformers.pipelines.eval.model_summary(
+            model_obj=__prefix,
+            input_shape=(1, 2, 4))
+        # (B, T, output_dim)
+        assert len(__out) == 3
+        assert __out[0] == 1
+        assert __out[1] == 2
+        assert __out[2] == 8  # output_dim
+
+    def test_prints_output(self, capsys):
+        __prefix = self._make_prefix()
+        deformers.pipelines.eval.model_summary(
+            model_obj=__prefix,
+            input_shape=(1, 2, 4))
+        __out = capsys.readouterr().out
+        # should mention the top-level class
+        assert 'CompositeBytePrefix' in __out
+        # should show in/out shapes
+        assert 'in:' in __out
+        assert 'out:' in __out
+
+    def test_prints_config(self, capsys):
+        __prefix = self._make_prefix()
+        deformers.pipelines.eval.model_summary(
+            model_obj=__prefix,
+            input_shape=(1, 2, 4))
+        __out = capsys.readouterr().out
+        # config block should appear
+        assert 'config:' in __out
+        assert 'embed_dim' in __out
+
+    def test_plain_nn_module(self, capsys):
+        # model_summary should work on any nn.Module, not just CompositeBytePrefix
+        __linear = torch.nn.Linear(4, 8)
+        __out = deformers.pipelines.eval.model_summary(
+            model_obj=__linear,
+            input_shape=(2, 4))
+        assert isinstance(__out, tuple)

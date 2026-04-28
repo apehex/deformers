@@ -48,8 +48,8 @@ import mlable.metrics
 import mlable.models
 
 import deformers.datasets.random
-import deformers.layers.prefix
 import deformers.models.generic
+import deformers.models.prefix
 import deformers.pipelines.eval
 import deformers.pipelines.patch
 import deformers.pipelines.prefix
@@ -90,6 +90,13 @@ PREPROC_CFG = {
     'padding':    'max_length',
     'max_length': BATCH_CFG['sequence_dim'],}
 
+VECTORIZE_CFG = {
+    'sequence_dim': BATCH_CFG['sequence_dim'],
+    'patch_dim':    BATCH_CFG['patch_dim'],
+    'device_str':   MAIN_CFG['device_str'],
+    'dtype_obj':    torch.long,
+    'left_pad':     True,}
+
 TOKEN_CFG = {
     'pretrained_model_name_or_path': MAIN_CFG['model_str'],
     'use_fast':                      True,}
@@ -115,6 +122,17 @@ MODEL_CFG = {
     'dtype':                         torch.bfloat16,
     'low_cpu_mem_usage':             True,
     'ignore_mismatched_sizes':       True,}
+
+PREFIX_CFG = {
+    'embed_dim':     128,   # dimension of each byte embedding
+    'patch_dim':     -1,    # inferred from input shape
+    'hidden_dim':    4096,  # intermediate MLP width
+    'output_dim':    4096,  # teacher hidden_size (qwen3.5-9b)
+    'vocab_dim':     256,   # byte vocabulary size
+    'padding_idx':   128,   # ByteTokenizer pad value
+    'block_num':     4,     # number of ByteTransformer blocks
+    'head_num':      4,     # self-attention heads
+    'dropout_rate':  0.001,}
 
 # CHECKPOINT CONFIG ############################################################
 
@@ -157,6 +175,9 @@ MIXED_CTX = (
 print('[init] loading the tokenizers...')
 TEXT_TOK = transformers.AutoTokenizer.from_pretrained(**TOKEN_CFG)
 BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(**BYTE_CFG)
+
+print('[init] defining a padding token...')
+TEXT_TOK.pad_token = TEXT_TOK.pad_token or TEXT_TOK.eos_token
 
 print('[init] calculating the tokenizer metadata...')
 VOCAB_LEN = len(TEXT_TOK.get_vocab())
@@ -219,19 +240,20 @@ PREFIX_MOD = deformers.pipelines.eval.load_prefix_checkpoint(
     device=CHECKPOINT_CFG['device'])
 PREFIX_MOD.eval()
 
+print('[init] prefix model summary...')
+deformers.pipelines.eval.model_summary(
+    model_obj=PREFIX_MOD,
+    input_shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']))
+
 # UTILITIES ####################################################################
 
 print('[init] creating specialized utilities...')
 
 vectorize = functools.partial(
-    deformers.pipelines.prefix.tensors_from_indices,
+    deformers.pipelines.prefix.vectorize_indices,
     text_tok=TEXT_TOK,
     byte_tok=BYTE_TOK,
-    dtype_obj=torch.long,
-    sequence_dim=BATCH_CFG['sequence_dim'],
-    patch_dim=BATCH_CFG['patch_dim'],
-    device_str=MAIN_CFG['device_str'],
-    left_pad=True)
+    **VECTORIZE_CFG)
 
 def embed(
     indices_arr: torch.Tensor,
@@ -353,7 +375,7 @@ if EVAL_CFG['probe_sentences']:
     print('\n[eval] === fixed sentence probe ===')
 
     # build probe tensors from raw text
-    __probe_mask, __probe_ids, __probe_bytes = deformers.pipelines.prefix.tensors_from_strings(
+    __probe_mask, __probe_ids, __probe_bytes = deformers.pipelines.prefix.vectorize_strings(
         text_arr=EVAL_CFG['probe_sentences'],
         text_tok=TEXT_TOK,
         byte_tok=BYTE_TOK,
