@@ -216,6 +216,9 @@ VOCAB_ARR = {__v: __k for (__k, __v) in TEXT_TOK.get_vocab().items()}
 VOCAB_LEN = len(VOCAB_ARR)
 DATASET_CFG['random']['vocab_dim'] = VOCAB_LEN
 
+print('[init] defining a padding token...')
+TEXT_TOK.pad_token = TEXT_TOK.eos_token if not bool(TEXT_TOK.pad_token) else TEXT_TOK.pad_token
+
 # DATASET ######################################################################
 
 def preprocess(sample: dict) -> dict:
