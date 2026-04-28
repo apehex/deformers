@@ -133,9 +133,9 @@ MODEL_CFG = {
     'ignore_mismatched_sizes': True,}
 
 PREFIX_CFG = {
-    'embed_dim': 256, # 32 * 256 = 8192
+    'embed_dim': 128, # 32 * 128 = 4096
     'patch_dim': -1,
-    'hidden_dim': -1,
+    'hidden_dim': 4096,
     'output_dim': 4096,
     'vocab_dim': 256,
     'padding_idx': 128,
@@ -167,10 +167,10 @@ SCHEDULER_CFG = { # counted in acc steps (not micro steps)
     'warmup_num': 128,}
 
 LOSS_CFG = {
-    'mse_0_rate': 10.0,
-    'mse_k_rate': 1.0,
-    'cos_0_rate': 0.0,
-    'cos_k_rate': 0.0,}
+    'mse_0_rate': 1.0,
+    'mse_k_rate': 0.1,
+    'cos_0_rate': 1.0,
+    'cos_k_rate': 0.1,}
 
 # TESTING CONFIG ###############################################################
 
