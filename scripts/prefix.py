@@ -370,6 +370,11 @@ PROBE_I = deformers.pipelines.eval.indices_probe(
 print('[clean] freeing the unused memory...')
 mlable.models.free_memory()
 
+# SUMMARY ######################################################################
+
+print('[check] showing the prefix architecture...')
+print(PREFIX_MOD)
+
 # TRAINING #####################################################################
 
 for __epoch in range(TRAINING_CFG['epoch_num']):
