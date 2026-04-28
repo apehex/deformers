@@ -355,7 +355,7 @@ def format_state(state: dict) -> dict:
         'loss': f"(ema: {state['loss/ema']:.6f} total: {state['loss/total']:.6f} mse(0: {state['loss/mse/0']:.6f} k: {state['loss/mse/k']:.6f}) cos(0: {state['loss/cos/0']:.6f} k: {state['loss/cos/k']:.6f}))",
         'gradient': f"(rate: {state['gradient/rate']:.2e} norm: {state['gradient/norm']:.4f})",
         'iter': f"(time: {state['iter/time'] * 1000.0:.0f} tok/s: {state['iter/tps']:.0f})",
-        'vocab': f"(seen: {state['vocab/seen'] * 100.0:.1f}% max: {state['vocab/max'] * 100.0:.1f}%)",}
+        'vocab': f"(seen: {state['vocab/seen'] * 100.0:.1f}% min: {state['vocab/min']} max: {state['vocab/max']})",}
 
 # TESTING ######################################################################
 
@@ -418,7 +418,8 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         # track token stats
         __count += torch.bincount(__indices_arr.flatten().cpu(), minlength=VOCAB_LEN)
         __state['vocab/seen'] = float((__count > 0).sum().item()) / VOCAB_LEN
-        __state['vocab/max'] = float(__count.max().item()) / float(__count.sum().item())
+        __state['vocab/min'] = int(__count.min().item())
+        __state['vocab/max'] = int(__count.max().item())
 
         # the total loss is the average loss after N accumulation steps
         __state['loss/mse/0'] += __losses[0].item()
