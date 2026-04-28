@@ -87,6 +87,7 @@ def compute_losses(
     mse_k_rate: float=1.0,
     cos_0_rate: float=0.0,
     cos_k_rate: float=0.0,
+    relative_opt: bool=True,
 ) -> tuple[torch.Tensor]:
     """Compute the combined embedding and hidden-state MSE loss."""
     assert any((__r > 0.0) for __r in [mse_0_rate, mse_k_rate, cos_0_rate, cos_k_rate])
@@ -98,6 +99,7 @@ def compute_losses(
             predict_arr=student_0_arr.float(),
             target_arr=teacher_0_arr.float(),
             mask_arr=mask_arr,
+            relative_opt=relative_opt,
             reduce_opt=True)
     # MSE on the hidden states at depth k
     if mse_k_rate > 0.0:
@@ -105,6 +107,7 @@ def compute_losses(
             predict_arr=student_k_arr.float(),
             target_arr=teacher_k_arr.float(),
             mask_arr=mask_arr,
+            relative_opt=relative_opt,
             reduce_opt=True)
     # KL divergence on the embeddings (depth 0)
     if cos_0_rate > 0.0:

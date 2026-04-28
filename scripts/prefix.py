@@ -167,10 +167,12 @@ SCHEDULER_CFG = { # counted in acc steps (not micro steps)
     'warmup_num': 128,}
 
 LOSS_CFG = {
+    'step_num': GRADIENT_CFG['step_num'],
     'mse_0_rate': 1.0,
     'mse_k_rate': 0.1,
     'cos_0_rate': 1.0,
-    'cos_k_rate': 0.1,}
+    'cos_k_rate': 0.1,
+    'relative_opt': True,}
 
 # TESTING CONFIG ###############################################################
 
@@ -327,7 +329,6 @@ vectorize = functools.partial(
 
 score = functools.partial(
     deformers.pipelines.prefix.compute_losses,
-    step_num=GRADIENT_CFG['step_num'],
     **LOSS_CFG)
 
 def embed(
