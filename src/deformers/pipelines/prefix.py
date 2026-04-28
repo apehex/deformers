@@ -6,7 +6,7 @@ import deformers.pipelines.patch
 
 # PREPROCESSING ################################################################
 
-def tensors_from_strings(
+def vectorize_strings(
     text_arr: list[str],
     text_tok: object,
     byte_tok: object,
@@ -39,7 +39,7 @@ def tensors_from_strings(
     # (B, T), (B, T), (B, T, G)
     return __mask_arr, __indices_arr, __bytes_arr
 
-def tensors_from_indices(
+def vectorize_indices(
     indices_arr: list[list[int]],
     text_tok: object,
     byte_tok: object,
@@ -81,49 +81,56 @@ def compute_losses(
     student_k_arr: torch.Tensor,
     teacher_0_arr: torch.Tensor,
     teacher_k_arr: torch.Tensor,
-    mask_arr: torch.Tensor,
-    step_num: int,
+    mask_arr: torch.Tensor=None,
+    step_num: int=1,
     mse_0_rate: float=1.0,
     mse_k_rate: float=1.0,
-    kld_0_rate: float=0.0,
-    kld_k_rate: float=0.0,
+    cos_0_rate: float=0.0,
+    cos_k_rate: float=0.0,
+    relative_opt: bool=True,
 ) -> tuple[torch.Tensor]:
     """Compute the combined embedding and hidden-state MSE loss."""
-    assert any((__r > 0.0) for __r in [mse_0_rate, mse_k_rate, kld_0_rate, kld_k_rate])
+    assert any((__r > 0.0) for __r in [mse_0_rate, mse_k_rate, cos_0_rate, cos_k_rate])
     # default to 0 when a factor is null
-    __mse_0, __mse_k, __kld_0, __kld_k = torch.tensor(0.0), torch.tensor(0.0), torch.tensor(0.0), torch.tensor(0.0)
+    __mse_0, __mse_k, __cos_0, __cos_k = torch.tensor(0.0), torch.tensor(0.0), torch.tensor(0.0), torch.tensor(0.0)
     # MSE on the embeddings (depth 0)
     if mse_0_rate > 0.0:
         __mse_0 = mlable.losses.mse_loss(
             predict_arr=student_0_arr.float(),
             target_arr=teacher_0_arr.float(),
-            mask_arr=mask_arr)
+            mask_arr=mask_arr,
+            relative_opt=relative_opt,
+            reduce_opt=True)
     # MSE on the hidden states at depth k
     if mse_k_rate > 0.0:
         __mse_k = mlable.losses.mse_loss(
             predict_arr=student_k_arr.float(),
             target_arr=teacher_k_arr.float(),
-            mask_arr=mask_arr)
+            mask_arr=mask_arr,
+            relative_opt=relative_opt,
+            reduce_opt=True)
     # KL divergence on the embeddings (depth 0)
-    if kld_0_rate > 0.0:
-        __kld_0 = mlable.losses.kl_div(
+    if cos_0_rate > 0.0:
+        __cos_0 = mlable.losses.cos_sim(
             predict_arr=student_0_arr.float(),
             target_arr=teacher_0_arr.float(),
-            mask_arr=mask_arr)
+            mask_arr=mask_arr,
+            reduce_opt=True)
     # MSE on the hidden states at depth k
-    if kld_k_rate > 0.0:
-        __kld_k = mlable.losses.kl_div(
+    if cos_k_rate > 0.0:
+        __cos_k = mlable.losses.cos_sim(
             predict_arr=student_k_arr.float(),
             target_arr=teacher_k_arr.float(),
-            mask_arr=mask_arr)
+            mask_arr=mask_arr,
+            reduce_opt=True)
     # combine the losses
-    __loss = mse_0_rate * __mse_0 + mse_k_rate * __mse_k + kld_0_rate * __kld_0 + kld_k_rate * __kld_k
+    __loss = mse_0_rate * __mse_0 + mse_k_rate * __mse_k + cos_0_rate * (1.0 - __cos_0) + cos_k_rate * (1.0 - __cos_k)
     # average over the gradient accumulation steps
     __factor = float(max(1, step_num))
     # return the components for monitoring
     return (
         __mse_0.detach() / __factor,
         __mse_k.detach() / __factor,
-        __kld_0.detach() / __factor,
-        __kld_k.detach() / __factor,
+        __cos_0.detach() / __factor,
+        __cos_k.detach() / __factor,
         __loss / __factor)

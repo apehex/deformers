@@ -52,11 +52,37 @@ Token strings are encoded as follows:
 - source: raw token-piece strings obtained via `tokenizer.get_vocab()` (not `decode()`), to preserve the exact byte composition of each learned BPE symbol
 - encoding: UTF-8 bytes per token-piece
 - fixed patch length: 32 bytes
-- padding: shorter tokens are right-padded with null bytes (byte value 128)
+- padding: shorter tokens are left-padded with sentinel byte value 128
 - truncation: tokens longer than 32 bytes are truncated; this affects ~2.6% of the vocabulary (mostly binary/CJK data tokens)
 - padding token: the tokenizer pad token (`<|endoftext|>`) is replaced by an empty string before byte encoding, so it maps to a full patch of padding bytes
 
-Rationale: a fixed patch length makes the byte-to-embedding projection architecture simple and the input shape fully static.
+Rationale:
+- a fixed patch length makes the byte-to-embedding projection architecture simple and the input shape fully static
+- the value 128 is not a valid single-byte UTF-8 character, which makes it suitable as an internal padding marker
+
+## Prefix Architecture Policy
+
+The prefix module maps fixed-size byte patches to the hidden size of the
+teacher model:
+
+```text
+bytes:  (B, T, G)
+output: (B, T, H)
+```
+
+where:
+
+- `B` is the batch dimension
+- `T` is the token sequence dimension
+- `G` is the fixed byte-patch length, currently 32
+- `H` is the hidden size of the frozen teacher trunk
+
+The prefix must process each token patch independently.
+It may attend over the byte-patch axis `G`, but it must not attend over the token sequence axis `T` when used as a strict embedding-table replacement.
+
+Rationale:
+- the original embedding table is context-independent
+- preserving this property makes the prefix easier to evaluate
 
 ## Training Decomposition
 

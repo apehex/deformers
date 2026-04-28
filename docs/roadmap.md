@@ -55,9 +55,21 @@ Current implementation:
 Architecture experiments (planned):
 - [ ] norm variant: replace LayerNorm with RMSNorm
 - [ ] no-norm variant: remove normalization layers entirely
-- [ ] attention on patch axis: add a self-attention layer over the G byte-embedding positions within each patch (byte embedding axis kept separate)
+- [ ] attention on patch axis: add self-attention over the G byte-embedding positions within each patch
+- [ ] padding-aware byte attention: derive byte-level paddings from the padding sentinel and pass them as `key_padding_mask`
+- [ ] residual pre-norm patch block:
+  - [ ] `x = x + SelfAttention(RMSNorm(x), paddings)`
+  - [ ] `x = x + MLP(RMSNorm(x))`
+- [ ] projection head variant: replace `Linear -> SiLU -> Linear` with SwiGLU
+- [ ] readout variant: keep flattened readout as baseline
+- [ ] readout variant: add masked mean pooling over the byte-patch axis
+- [ ] readout variant: add learned attention pooling over the byte-patch axis
+- [ ] readout variant: add learned readout token over the byte-patch axis
+- [ ] length embedding: add byte-length embedding after readout
+- [ ] output calibration: initialize or learn an output scale to match teacher embedding RMS
 - [ ] wider MLP: increase intermediate dimension in the projection MLP
-- [ ] add a transformer decoder block inside the prefix (deeper context integration)
+- [ ] contextual prefix ablation: optionally add cross-token attention only as a separate experiment, not as the default embedding-table replacement
+ 
 
 ## Training [~]
 
@@ -159,7 +171,9 @@ Objective: understand current error distribution before changing the architectur
 - [ ] norm distribution: compare L2 norms of student vs teacher embeddings and hidden states
 - [ ] cosine similarity: distribution of cosine similarities between student and teacher vectors per token
 - [ ] anisotropy: measure the degree of isotropy in student vs teacher embedding spaces
-
+- [ ] output scale drift: compare prefix output RMS against the original embedding table RMS
+- [ ] byte-length breakdown: compare prefix error by UTF-8 byte length and truncation status
+ 
 ## Calibration Experiments
 
 - [ ] controlled noise injection: add Gaussian noise of varying scale to teacher embeddings, then measure the effect on:
@@ -188,7 +202,12 @@ Objective: understand current error distribution before changing the architectur
 
 - [ ] norm variant: RMSNorm instead of LayerNorm in the projection head
 - [ ] no-norm variant: remove all normalization layers, rely on weight initialization and learning rate
-- [ ] attention on patch axis: self-attention over G byte-embedding positions within each patch (byte embedding axis kept separate from sequence axis)
+- [ ] attention on patch axis: self-attention over G byte-embedding positions within each patch, with byte padding passed as `key_padding_mask`
+- [ ] residual byte-patch transformer block with pre-norm attention and MLP
+- [ ] SwiGLU projection head
+- [ ] compare flattened readout against masked mean pooling, learned attention pooling, and learned readout-token pooling
+- [ ] add explicit byte-length embedding and measure whether it improves short-token and long-token alignment
+- [ ] compare output scale calibration strategies
 - [ ] wider MLP: increase intermediate dimension in the projection MLP
 
 ---
@@ -386,6 +405,11 @@ Not required for prefix/suffix patching pipeline.
 - best depth for hidden-state alignment
 - does attention over the patch axis (G byte-embedding positions) improve alignment quality?
 - is LayerNorm, RMSNorm, or no normalization best for the projection head?
+- does padding-aware byte attention converge faster than implicit padding learning?
+- does flattened readout outperform pooled readout when the byte dimension is chosen so that `G*E == H`?
+- does learned readout pooling improve embedding geometry compared to flattened byte-slot composition?
+- does explicit byte-length conditioning improve the alignment of short, padded, and truncated tokens?
+- how closely must the prefix output norm distribution match the teacher embedding table?
 
 ## Data
 

@@ -44,8 +44,9 @@ import mlable.models
 import mlable.schedulers
 import mlable.utils
 
-import deformers.layers.prefix
+import deformers.datasets.random
 import deformers.models.generic
+import deformers.models.prefix
 import deformers.pipelines.eval
 import deformers.pipelines.monitor
 import deformers.pipelines.patch
@@ -96,6 +97,13 @@ PREPROC_CFG = {
     'padding': 'max_length',
     'max_length': BATCH_CFG['sequence_dim'],}
 
+VECTORIZE_CFG = {
+    'sequence_dim': BATCH_CFG['sequence_dim'],
+    'patch_dim': BATCH_CFG['patch_dim'],
+    'device_str': MAIN_CFG['device_str'],
+    'dtype_obj': torch.long,
+    'left_pad': True,}
+
 # PREPROCESSING CONFIG #########################################################
 
 TOKEN_CFG = {
@@ -125,10 +133,15 @@ MODEL_CFG = {
     'ignore_mismatched_sizes': True,}
 
 PREFIX_CFG = {
-    'embed_dim': 256, # 32 * 256 = 8192
+    'embed_dim': 128, # 32 * 128 = 4096
+    'patch_dim': -1,
+    'hidden_dim': 4096,
+    'output_dim': 4096,
     'vocab_dim': 256,
-    'latent_dim': 4096,
-    'group_dim': -1,}
+    'padding_idx': 128,
+    'block_num': 4,
+    'head_num': 4,
+    'dropout_rate': 0.001,}
 
 # TRAINING CONFIG ##############################################################
 
@@ -154,10 +167,12 @@ SCHEDULER_CFG = { # counted in acc steps (not micro steps)
     'warmup_num': 128,}
 
 LOSS_CFG = {
-    'mse_0_rate': 10.0,
-    'mse_k_rate': 1.0,
-    'kld_0_rate': 0.0,
-    'kld_k_rate': 0.0,}
+    'step_num': GRADIENT_CFG['step_num'],
+    'mse_0_rate': 1.0,
+    'mse_k_rate': 0.1,
+    'cos_0_rate': 1.0,
+    'cos_k_rate': 0.1,
+    'relative_opt': True,}
 
 # TESTING CONFIG ###############################################################
 
@@ -184,8 +199,8 @@ STATE_CFG = {
     'loss/total': lambda __x: 0.0,
     'loss/mse/0': lambda __x: 0.0,
     'loss/mse/k': lambda __x: 0.0,
-    'loss/kldiv/0': lambda __x: 0.0,
-    'loss/kldiv/k': lambda __x: 0.0,
+    'loss/cos/0': lambda __x: 0.0,
+    'loss/cos/k': lambda __x: 0.0,
     'vocab/seen': lambda __x: 0.0,
     'vocab/max': lambda __x: 0.0,
     'gpu/memory/allocated': lambda __x: 0.0,
@@ -209,6 +224,9 @@ print('[init] calculating the tokenizer metadata...')
 VOCAB_ARR = {__v: __k for (__k, __v) in TEXT_TOK.get_vocab().items()}
 VOCAB_LEN = len(VOCAB_ARR)
 DATASET_CFG['random']['vocab_dim'] = VOCAB_LEN
+
+print('[init] defining a padding token...')
+TEXT_TOK.pad_token = TEXT_TOK.eos_token if not bool(TEXT_TOK.pad_token) else TEXT_TOK.pad_token
 
 # DATASET ######################################################################
 
@@ -256,9 +274,9 @@ SOURCE_MOD.eval()
 mlable.models.freeze(SOURCE_MOD)
 
 print('[init] creating the student...')
-PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
+PREFIX_MOD = deformers.models.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
 if MAIN_CFG['resume_opt'] and os.path.exists(CHECKPOINT_CFG['save_path']):
-    PREFIX_MOD = deformers.layers.prefix.CompositeBytePrefix.load_checkpoint(
+    PREFIX_MOD = deformers.models.prefix.CompositeBytePrefix.load_checkpoint(
         path=CHECKPOINT_CFG['save_path'],
         shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
         device=MAIN_CFG['device_str'])
@@ -303,29 +321,14 @@ OPTIMIZER_OBJ.zero_grad()
 
 print('[init] creating specialized utilities...')
 
-# vectorize_strings = functools.partial(
-#     deformers.pipelines.prefix.tensors_from_strings,
-#     text_tok=TEXT_TOK,
-#     byte_tok=BYTE_TOK,
-#     dtype_obj=torch.long,
-#     sequence_dim=BATCH_CFG['sequence_dim'],
-#     patch_dim=BATCH_CFG['patch_dim'],
-#     device_str=MAIN_CFG['device_str'],
-#     left_pad=True)
-
 vectorize = functools.partial(
-    deformers.pipelines.prefix.tensors_from_indices,
+    deformers.pipelines.prefix.vectorize_indices,
     text_tok=TEXT_TOK,
     byte_tok=BYTE_TOK,
-    dtype_obj=torch.long,
-    sequence_dim=BATCH_CFG['sequence_dim'],
-    patch_dim=BATCH_CFG['patch_dim'],
-    device_str=MAIN_CFG['device_str'],
-    left_pad=True)
+    **VECTORIZE_CFG)
 
 score = functools.partial(
     deformers.pipelines.prefix.compute_losses,
-    step_num=GRADIENT_CFG['step_num'],
     **LOSS_CFG)
 
 def embed(
@@ -350,11 +353,10 @@ def format_state(state: dict) -> dict:
         '': f"[{' '.join(state['switch/train'] * ['train'] + (not state['switch/train']) * ['test'] + state['switch/grad'] * ['grad'] + state['switch/log'] * ['log'] + state['switch/save'] * ['save'])}]",
         'epoch': f"({state['epoch/current']}/{state['epoch/total']})",
         'step': f"({state['step/current']}/{state['step/total']})",
-        'loss': f"(ema: {state['loss/ema']:.6f} total: {state['loss/total']:.6f} mse(0: {state['loss/mse/0']:.6f} k: {state['loss/mse/k']:.6f}) kl-div(0: {state['loss/kldiv/0']:.6f} k: {state['loss/kldiv/k']:.6f}))",
+        'loss': f"(ema: {state['loss/ema']:.6f} total: {state['loss/total']:.6f} mse(0: {state['loss/mse/0']:.6f} k: {state['loss/mse/k']:.6f}) cos(0: {state['loss/cos/0']:.6f} k: {state['loss/cos/k']:.6f}))",
         'gradient': f"(rate: {state['gradient/rate']:.2e} norm: {state['gradient/norm']:.4f})",
         'iter': f"(time: {state['iter/time'] * 1000.0:.0f} tok/s: {state['iter/tps']:.0f})",
-        'vocab': f"(seen: {state['vocab/seen'] * 100.0:.1f}% max: {state['vocab/max'] * 100.0:.1f}%)",
-        }
+        'vocab': f"(seen: {state['vocab/seen'] * 100.0:.1f}% min: {state['vocab/min']} max: {state['vocab/max']})",}
 
 # TESTING ######################################################################
 
@@ -368,6 +370,11 @@ PROBE_I = deformers.pipelines.eval.indices_probe(
 
 print('[clean] freeing the unused memory...')
 mlable.models.free_memory()
+
+# SUMMARY ######################################################################
+
+print('[check] showing the prefix architecture...')
+print(PREFIX_MOD)
 
 # TRAINING #####################################################################
 
@@ -417,13 +424,14 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         # track token stats
         __count += torch.bincount(__indices_arr.flatten().cpu(), minlength=VOCAB_LEN)
         __state['vocab/seen'] = float((__count > 0).sum().item()) / VOCAB_LEN
-        __state['vocab/max'] = float(__count.max().item()) / float(__count.sum().item())
+        __state['vocab/min'] = int(__count.min().item())
+        __state['vocab/max'] = int(__count.max().item())
 
         # the total loss is the average loss after N accumulation steps
         __state['loss/mse/0'] += __losses[0].item()
         __state['loss/mse/k'] += __losses[1].item()
-        __state['loss/kldiv/0'] += __losses[2].item()
-        __state['loss/kldiv/k'] += __losses[3].item()
+        __state['loss/cos/0'] += __losses[2].item()
+        __state['loss/cos/k'] += __losses[3].item()
         __state['loss/total'] += __losses[-1].item()
 
         # optimizer step after gradient accumulation
