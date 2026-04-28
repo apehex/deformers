@@ -97,6 +97,13 @@ PREPROC_CFG = {
     'padding': 'max_length',
     'max_length': BATCH_CFG['sequence_dim'],}
 
+VECTORIZE_CFG = {
+    'sequence_dim': BATCH_CFG['sequence_dim'],
+    'patch_dim': BATCH_CFG['patch_dim'],
+    'device_str': MAIN_CFG['device_str'],
+    'dtype_obj': torch.long,
+    'left_pad': True,}
+
 # PREPROCESSING CONFIG #########################################################
 
 TOKEN_CFG = {
@@ -316,11 +323,7 @@ vectorize = functools.partial(
     deformers.pipelines.prefix.vectorize_indices,
     text_tok=TEXT_TOK,
     byte_tok=BYTE_TOK,
-    dtype_obj=torch.long,
-    sequence_dim=BATCH_CFG['sequence_dim'],
-    patch_dim=BATCH_CFG['patch_dim'],
-    device_str=MAIN_CFG['device_str'],
-    left_pad=True)
+    **VECTORIZE_CFG)
 
 score = functools.partial(
     deformers.pipelines.prefix.compute_losses,
