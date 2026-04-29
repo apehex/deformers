@@ -13,27 +13,6 @@ import deformers.pipelines.eval
 
 # META #########################################################################
 
-# FIXTURES #####################################################################
-
-@pytest.fixture
-def fake_byte_tok():
-    """Minimal byte tokenizer stub for vocab_probe_bytes tests."""
-    import deformers.tokenizers.byte
-    return deformers.tokenizers.byte.ByteTokenizer(encoding='utf-8')
-
-@pytest.fixture
-def fake_text_tok():
-    """Minimal text tokenizer stub for vocab_probe_bytes tests."""
-
-    class _FakeTextTok:
-        pad_token = '<pad>'
-
-        def decode(self, ids, skip_special_tokens=False):
-            # map each id to a single ASCII character
-            return ''.join(chr(ord('a') + (__i % 26)) for __i in ids)
-
-    return _FakeTextTok()
-
 # INDICES_PROBE ################################################################
 
 class TestIndicesProbe:
@@ -72,38 +51,6 @@ class TestIndicesProbe:
             vocab_dim=256, batch_dim=2, sequence_dim=8)
         for __row in __result:
             assert all(isinstance(__i, int) for __i in __row)
-
-# VOCAB_PROBE_BYTES ############################################################
-
-class TestVocabProbeBytes:
-
-    def test_shape(self, fake_text_tok, fake_byte_tok):
-        __ids = [[0, 1, 2], [3, 4, 5]]
-        __patch = 4
-        __result = deformers.pipelines.eval.vocab_probe_bytes(
-            vocab_ids=__ids,
-            text_tok=fake_text_tok,
-            byte_tok=fake_byte_tok,
-            patch_dim=__patch)
-        assert isinstance(__result, list)
-        assert len(__result) == 2
-        for __row in __result:
-            assert len(__row) == 3
-            for __block in __row:
-                assert len(__block) == __patch
-
-    def test_deterministic(self, fake_text_tok, fake_byte_tok):
-        __ids = [[0, 1], [2, 3]]
-        __a = deformers.pipelines.eval.vocab_probe_bytes(__ids, fake_text_tok, fake_byte_tok, 4)
-        __b = deformers.pipelines.eval.vocab_probe_bytes(__ids, fake_text_tok, fake_byte_tok, 4)
-        assert __a == __b
-
-    def test_all_integers(self, fake_text_tok, fake_byte_tok):
-        __ids = [[0, 1]]
-        __result = deformers.pipelines.eval.vocab_probe_bytes(__ids, fake_text_tok, fake_byte_tok, 4)
-        for __row in __result:
-            for __block in __row:
-                assert all(isinstance(__b, int) for __b in __block)
 
 # PER_TOKEN_METRICS ############################################################
 
@@ -331,96 +278,3 @@ class TestMlableMetricEdgeCases:
         __mask = torch.zeros(2, 4)
         __result = mlable.metrics.topk_rate(__logits, __logits, mask_arr=__mask, k_num=5)
         assert __result.item() == pytest.approx(0.0)
-
-# LOAD_PREFIX_CHECKPOINT #######################################################
-
-class TestLoadPrefixCheckpoint:
-
-    def test_raises_file_not_found(self):
-        with pytest.raises(FileNotFoundError, match='prefix checkpoint not found'):
-            deformers.pipelines.eval.load_prefix_checkpoint(
-                path='/nonexistent/path/prefix.pt',
-                shape=(1, 4, 8),
-                device='cpu')
-
-    def test_loads_valid_checkpoint(self, tmp_path):
-        import deformers.models.prefix
-        # create a minimal prefix and save it
-        __prefix = deformers.models.prefix.CompositeBytePrefix(
-            embed_dim=4, vocab_dim=4, output_dim=8, block_num=1, head_num=1)
-        __prefix.build(shape=(1, 2, 4), device='cpu')
-        __ckpt_path = str(tmp_path / 'prefix.pt')
-        __prefix.save_checkpoint(__ckpt_path)
-        # load back via eval helper
-        __loaded = deformers.pipelines.eval.load_prefix_checkpoint(
-            path=__ckpt_path,
-            shape=(1, 2, 4),
-            device='cpu')
-        assert isinstance(__loaded, deformers.models.prefix.CompositeBytePrefix)
-
-# MODEL_SUMMARY ################################################################
-
-class TestModelSummary:
-
-    def _make_prefix(self):
-        import deformers.models.prefix
-        __prefix = deformers.models.prefix.CompositeBytePrefix(
-            embed_dim=4, vocab_dim=4, output_dim=8, block_num=1, head_num=1)
-        __prefix.build(shape=(1, 2, 4), device='cpu')
-        return __prefix
-
-    def test_returns_output_shape(self):
-        __prefix = self._make_prefix()
-        __out = deformers.pipelines.eval.model_summary(
-            model_obj=__prefix,
-            input_shape=(1, 2, 4))
-        # top-level output shape should match output_shape()
-        assert __out == __prefix.output_shape((1, 2, 4))
-
-    def test_returns_tuple(self):
-        __prefix = self._make_prefix()
-        __out = deformers.pipelines.eval.model_summary(
-            model_obj=__prefix,
-            input_shape=(1, 2, 4))
-        assert isinstance(__out, tuple)
-
-    def test_output_shape_rank(self):
-        __prefix = self._make_prefix()
-        __out = deformers.pipelines.eval.model_summary(
-            model_obj=__prefix,
-            input_shape=(1, 2, 4))
-        # (B, T, output_dim)
-        assert len(__out) == 3
-        assert __out[0] == 1
-        assert __out[1] == 2
-        assert __out[2] == 8  # output_dim
-
-    def test_prints_output(self, capsys):
-        __prefix = self._make_prefix()
-        deformers.pipelines.eval.model_summary(
-            model_obj=__prefix,
-            input_shape=(1, 2, 4))
-        __out = capsys.readouterr().out
-        # should mention the top-level class
-        assert 'CompositeBytePrefix' in __out
-        # should show in/out shapes
-        assert 'in:' in __out
-        assert 'out:' in __out
-
-    def test_prints_config(self, capsys):
-        __prefix = self._make_prefix()
-        deformers.pipelines.eval.model_summary(
-            model_obj=__prefix,
-            input_shape=(1, 2, 4))
-        __out = capsys.readouterr().out
-        # config block should appear
-        assert 'config:' in __out
-        assert 'embed_dim' in __out
-
-    def test_plain_nn_module(self, capsys):
-        # model_summary should work on any nn.Module, not just CompositeBytePrefix
-        __linear = torch.nn.Linear(4, 8)
-        __out = deformers.pipelines.eval.model_summary(
-            model_obj=__linear,
-            input_shape=(2, 4))
-        assert isinstance(__out, tuple)

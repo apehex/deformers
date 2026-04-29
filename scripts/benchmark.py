@@ -13,15 +13,14 @@ Assumptions:
 - Memory-safe defaults: small batch, mixed precision on CUDA.
 - Colab: upload checkpoint to /content/checkpoints/prefix.pt before running.
 
-Metrics computed (all masked):
-- embedding MSE and cosine similarity
-- hidden-state MSE and cosine similarity at the configured trunk depth
-- logit KL divergence (teacher vs student)
-- top-1 and top-k set match rate
+Metrics computed:
+- eval loop (real text): embedding MSE/cosine, hidden-state MSE/cosine, logit KL, top-1/top-k
+- sentence and vocab probes: embedding MSE and cosine similarity only (hidden-state and
+  logit metrics are unreliable on fixed token sequences without global context)
 
 Probes:
-- fixed sentence probe: teacher vs student top-k tokens at last real position
-- vocab probe: deterministic (B, T) token tensor; per-token table + rankings
+- fixed sentence probe: embed MSE and cosine per sentence
+- vocab probe: deterministic (B, T) token tensor; per-token embed MSE/cosine table
 
 Outputs:
 - detailed stdout logs
@@ -58,48 +57,48 @@ import deformers.tokenizers.byte
 # COMMON CONFIG ################################################################
 
 MAIN_CFG = {
-    'model_str':    'qwen/qwen3.5-9b',
-    'device_str':   'cuda' if torch.cuda.is_available() else 'cpu',
-    'dtype_obj':    torch.bfloat16,
+    'model_str': 'qwen/qwen3.5-9b',
+    'device_str': 'cuda' if torch.cuda.is_available() else 'cpu',
+    'dtype_obj': torch.bfloat16,
     'encoding_str': 'utf-8',
-    'seed_num':     1337,
-    'batch_dim':    4,
+    'seed_num': 1337,
+    'batch_dim': 4,
     'sequence_dim': 256,
-    'patch_dim':    32,
-    'depth_num':    1,
-    'batch_num':    16,
-    'topk_num':     10,}
+    'patch_dim': 32,
+    'depth_num': 1,
+    'batch_num': 16,
+    'topk_num': 10,}
 
 # DATA CONFIG ##################################################################
 
 DATASET_CFG = {
-    'path':      'wikimedia/wikipedia',
-    'name':      '20231101.en',
-    'split':     'train[90%:]',
+    'path': 'wikimedia/wikipedia',
+    'name': '20231101.en',
+    'split': 'train[90%:]',
     'streaming': False,}
 
 BATCH_CFG = {
-    'batch_dim':    MAIN_CFG['batch_dim'],
+    'batch_dim': MAIN_CFG['batch_dim'],
     'sequence_dim': MAIN_CFG['sequence_dim'],
-    'patch_dim':    MAIN_CFG['patch_dim'],}
+    'patch_dim': MAIN_CFG['patch_dim'],}
 
 # PREPROCESSING CONFIG #########################################################
 
 PREPROC_CFG = {
     'truncation': 'longest_first',
-    'padding':    'max_length',
+    'padding': 'max_length',
     'max_length': BATCH_CFG['sequence_dim'],}
 
 VECTORIZE_CFG = {
     'sequence_dim': BATCH_CFG['sequence_dim'],
-    'patch_dim':    BATCH_CFG['patch_dim'],
-    'device_str':   MAIN_CFG['device_str'],
-    'dtype_obj':    torch.long,
-    'left_pad':     True,}
+    'patch_dim': BATCH_CFG['patch_dim'],
+    'device_str': MAIN_CFG['device_str'],
+    'dtype_obj': torch.long,
+    'left_pad': True,}
 
 TOKEN_CFG = {
     'pretrained_model_name_or_path': MAIN_CFG['model_str'],
-    'use_fast':                      True,}
+    'use_fast': True,}
 
 BYTE_CFG = {
     'encoding': MAIN_CFG['encoding_str'],}
@@ -107,32 +106,32 @@ BYTE_CFG = {
 # MODEL CONFIG #################################################################
 
 DOWNLOAD_CFG = {
-    'repo_id':         MAIN_CFG['model_str'],
-    'repo_type':       'model',
-    'local_dir':       os.path.abspath('downloads'),
+    'repo_id': MAIN_CFG['model_str'],
+    'repo_type': 'model',
+    'local_dir': os.path.abspath('downloads'),
     'ignore_patterns': ['*.onnx', '*.tflite', '*.msgpack'],}
 
 CONFIG_CFG = {
     'pretrained_model_name_or_path': DOWNLOAD_CFG['local_dir'],
-    'trust_remote_code':             False,}
+    'trust_remote_code': False,}
 
 MODEL_CFG = {
     'pretrained_model_name_or_path': DOWNLOAD_CFG['local_dir'],
-    'trust_remote_code':             CONFIG_CFG['trust_remote_code'],
-    'dtype':                         torch.bfloat16,
-    'low_cpu_mem_usage':             True,
-    'ignore_mismatched_sizes':       True,}
+    'trust_remote_code': CONFIG_CFG['trust_remote_code'],
+    'dtype': torch.bfloat16,
+    'low_cpu_mem_usage': True,
+    'ignore_mismatched_sizes': True,}
 
 PREFIX_CFG = {
-    'embed_dim':     128,   # dimension of each byte embedding
-    'patch_dim':     -1,    # inferred from input shape
-    'hidden_dim':    4096,  # intermediate MLP width
-    'output_dim':    4096,  # teacher hidden_size (qwen3.5-9b)
-    'vocab_dim':     256,   # byte vocabulary size
-    'padding_idx':   128,   # ByteTokenizer pad value
-    'block_num':     4,     # number of ByteTransformer blocks
-    'head_num':      4,     # self-attention heads
-    'dropout_rate':  0.001,}
+    'embed_dim': 128,
+    'patch_dim': -1,
+    'hidden_dim': 4096,
+    'output_dim': 4096,
+    'vocab_dim': 256,
+    'padding_idx': 128,
+    'block_num': 4,
+    'head_num': 4,
+    'dropout_rate': 0.001,}
 
 # CHECKPOINT CONFIG ############################################################
 
@@ -140,7 +139,7 @@ REPOSITORY_CFG = {
     'repo_path': '',}  # optional HF repo to download checkpoint from
 
 CHECKPOINT_CFG = {
-    'path':   os.environ.get('BENCHMARK_CHECKPOINT', '/content/checkpoints/prefix.pt'),
+    'path': os.environ.get('BENCHMARK_CHECKPOINT', '/content/checkpoints/prefix.pt'),
     'device': MAIN_CFG['device_str'],}
 # NOTE: default path /content/checkpoints/prefix.pt targets Colab.
 # Override via: BENCHMARK_CHECKPOINT=/path/to/prefix.pt python scripts/benchmark.py
@@ -149,7 +148,7 @@ CHECKPOINT_CFG = {
 
 EVAL_CFG = {
     'batch_num': MAIN_CFG['batch_num'],
-    'topk_num':  MAIN_CFG['topk_num'],
+    'topk_num': MAIN_CFG['topk_num'],
     'probe_sentences': [
         'The quick brown fox jumps over the lazy dog.',
         'In the beginning was the Word, and the Word was with God.',],
@@ -160,7 +159,7 @@ EVAL_CFG = {
 _TIMESTAMP = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H%M%SZ')
 
 LOGGING_CFG = {
-    'log_dir':     os.path.abspath('.logs'),
+    'log_dir': os.path.abspath('.logs'),
     'report_path': os.path.abspath(f'.logs/benchmark_{_TIMESTAMP}.json'),}
 
 # MIXED PRECISION ##############################################################
@@ -234,16 +233,11 @@ if REPOSITORY_CFG['repo_path']:
         repo_type='model')
 
 print(f'[init] loading the prefix checkpoint from {CHECKPOINT_CFG["path"]}...')
-PREFIX_MOD = deformers.pipelines.eval.load_prefix_checkpoint(
+PREFIX_MOD = deformers.models.prefix.CompositeBytePrefix.load_checkpoint(
     path=CHECKPOINT_CFG['path'],
     shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
     device=CHECKPOINT_CFG['device'])
 PREFIX_MOD.eval()
-
-print('[init] prefix model summary...')
-deformers.pipelines.eval.model_summary(
-    model_obj=PREFIX_MOD,
-    input_shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']))
 
 # UTILITIES ####################################################################
 
@@ -289,11 +283,11 @@ LOG_TB = torch.utils.tensorboard.SummaryWriter(log_dir=LOGGING_CFG['log_dir'])
 
 REPORT = {
     'timestamp': _TIMESTAMP,
-    'model':     MAIN_CFG['model_str'],
+    'model': MAIN_CFG['model_str'],
     'checkpoint': CHECKPOINT_CFG['path'],
     'eval_split': DATASET_CFG['split'],
-    'batch_num':  EVAL_CFG['batch_num'],
-    'topk_num':   EVAL_CFG['topk_num'],
+    'batch_num': EVAL_CFG['batch_num'],
+    'topk_num': EVAL_CFG['topk_num'],
     'eval_loop': {},
     'sentence_probe': {},
     'vocab_probe': {},}
@@ -304,13 +298,13 @@ print('[eval] starting evaluation loop...')
 
 __n_batches = 0
 __acc = {
-    'embed_mse':  0.0,
-    'embed_cos':  0.0,
+    'embed_mse': 0.0,
+    'embed_cos': 0.0,
     'hidden_mse': 0.0,
     'hidden_cos': 0.0,
-    'kl':         0.0,
-    'top1':       0.0,
-    'topk':       0.0,}
+    'kl': 0.0,
+    'top1': 0.0,
+    'topk': 0.0,}
 
 __dataset = DATASET_OBJ.iter(batch_size=BATCH_CFG['batch_dim'])
 
@@ -385,51 +379,28 @@ if EVAL_CFG['probe_sentences']:
         left_pad=True)
 
     with torch.no_grad():
-        __p_teacher_embeds  = embed(__probe_ids)
-        __p_teacher_hidden  = forward(__p_teacher_embeds, __probe_mask)
-        __p_teacher_logits  = logits(__p_teacher_hidden)
+        __p_teacher_embeds = embed(__probe_ids)
         with MIXED_CTX:
             __p_student_embeds = PREFIX_MOD(__probe_bytes).to(dtype=__p_teacher_embeds.dtype)
-        __p_student_hidden = forward(__p_student_embeds, __probe_mask)
-        __p_student_logits = logits(__p_student_hidden)
 
-    __probe_metrics = deformers.pipelines.eval.per_token_metrics(
-        teacher_embeds=__p_teacher_embeds,
-        student_embeds=__p_student_embeds,
-        teacher_hidden=__p_teacher_hidden,
-        student_hidden=__p_student_hidden,
-        teacher_logits=__p_teacher_logits,
-        student_logits=__p_student_logits,
-        mask=__probe_mask,
-        k_num=EVAL_CFG['topk_num'])
+    __p_embed_mse = mlable.losses.mse_loss(
+        __p_student_embeds.float(), __p_teacher_embeds.float(),
+        mask_arr=__probe_mask, relative_opt=True, reduce_opt=False).cpu()
+    __p_embed_cos = mlable.losses.cos_sim(
+        __p_student_embeds.float(), __p_teacher_embeds.float(),
+        mask_arr=__probe_mask, reduce_opt=False).cpu()
 
-    __k = EVAL_CFG['topk_num']
     __sentence_report = []
     for __i, __sent in enumerate(EVAL_CFG['probe_sentences']):
-        # position of the last real (non-padding) token
-        __pos = int(__probe_mask[__i].sum().item()) - 1
-        __t_top = __p_teacher_logits[__i, __pos].topk(__k).indices.tolist()
-        __s_top = __p_student_logits[__i, __pos].topk(__k).indices.tolist()
-        __t_toks = TEXT_TOK.convert_ids_to_tokens(__t_top)
-        __s_toks = TEXT_TOK.convert_ids_to_tokens(__s_top)
-        # per-sentence summary stats
         __s_mask = __probe_mask[__i:__i + 1].cpu()
-        __s_stats = {
-            __key: deformers.pipelines.eval.summary_stats(
-                __probe_metrics[__key][__i:__i + 1], __s_mask)
-            for __key in __probe_metrics}
+        __s_mse = deformers.pipelines.eval.summary_stats(__p_embed_mse[__i:__i + 1], __s_mask)
+        __s_cos = deformers.pipelines.eval.summary_stats(__p_embed_cos[__i:__i + 1], __s_mask)
         print(f'[eval] sentence {__i}: "{__sent[:60]}"')
-        print(f'[eval]   teacher top-{__k}: {__t_toks}')
-        print(f'[eval]   student top-{__k}: {__s_toks}')
-        print(f'[eval]   embed_mse={__s_stats["embed_mse"]["mean"]:.4f}'
-              f'  embed_cos={__s_stats["embed_cos"]["mean"]:.4f}'
-              f'  kl={__s_stats["kl"]["mean"]:.4f}')
+        print(f'[eval]   embed_mse={__s_mse["mean"]:.4f}  embed_cos={__s_cos["mean"]:.4f}')
         __sentence_report.append({
-            'sentence':   __sent,
-            'last_pos':   __pos,
-            'teacher_topk': __t_toks,
-            'student_topk': __s_toks,
-            **{__key: __s_stats[__key] for __key in __s_stats}})
+            'sentence': __sent,
+            'embed_mse': __s_mse,
+            'embed_cos': __s_cos})
 
     REPORT['sentence_probe'] = __sentence_report
 
@@ -438,49 +409,29 @@ if EVAL_CFG['probe_sentences']:
 if EVAL_CFG['vocab_probe']:
     print('\n[eval] === vocab probe ===')
 
-    # deterministic (B, T) token ID grid cycling over the vocabulary
-    __vocab_ids_list = deformers.pipelines.eval.indices_probe(
-        vocab_dim=VOCAB_LEN,
-        batch_dim=BATCH_CFG['batch_dim'],
-        sequence_dim=BATCH_CFG['sequence_dim'])
-
-    # build byte patches from vocab probe IDs
-    __vocab_bytes_list = deformers.pipelines.eval.vocab_probe_bytes(
-        vocab_ids=__vocab_ids_list,
-        text_tok=TEXT_TOK,
-        byte_tok=BYTE_TOK,
-        patch_dim=BATCH_CFG['patch_dim'])
-
-    # convert to tensors
-    __vocab_ids  = torch.tensor(__vocab_ids_list, dtype=torch.long, device=MAIN_CFG['device_str'])
-    __vocab_bytes = torch.tensor(__vocab_bytes_list, dtype=torch.long, device=MAIN_CFG['device_str'])
-    __vocab_mask  = torch.ones_like(__vocab_ids)
+    # build tensors from the deterministic token ID grid
+    __vocab_mask, __vocab_ids, __vocab_bytes = vectorize(
+        deformers.pipelines.eval.indices_probe(
+            vocab_dim=VOCAB_LEN,
+            batch_dim=BATCH_CFG['batch_dim'],
+            sequence_dim=BATCH_CFG['sequence_dim']))
 
     with torch.no_grad():
-        __v_teacher_embeds  = embed(__vocab_ids)
-        __v_teacher_hidden  = forward(__v_teacher_embeds, __vocab_mask)
-        __v_teacher_logits  = logits(__v_teacher_hidden)
+        __v_teacher_embeds = embed(__vocab_ids)
         with MIXED_CTX:
             __v_student_embeds = PREFIX_MOD(__vocab_bytes).to(dtype=__v_teacher_embeds.dtype)
-        __v_student_hidden = forward(__v_student_embeds, __vocab_mask)
-        __v_student_logits = logits(__v_student_hidden)
 
-    # per-position (B, T) masked metrics
-    __vocab_metrics = deformers.pipelines.eval.per_token_metrics(
-        teacher_embeds=__v_teacher_embeds,
-        student_embeds=__v_student_embeds,
-        teacher_hidden=__v_teacher_hidden,
-        student_hidden=__v_student_hidden,
-        teacher_logits=__v_teacher_logits,
-        student_logits=__v_student_logits,
-        mask=__vocab_mask,
-        k_num=EVAL_CFG['topk_num'])
+    __v_embed_mse = mlable.losses.mse_loss(
+        __v_student_embeds.float(), __v_teacher_embeds.float(),
+        mask_arr=__vocab_mask, relative_opt=True, reduce_opt=False).cpu()
+    __v_embed_cos = mlable.losses.cos_sim(
+        __v_student_embeds.float(), __v_teacher_embeds.float(),
+        mask_arr=__vocab_mask, reduce_opt=False).cpu()
 
-    # global summary over the full vocab probe
     __vocab_mask_cpu = __vocab_mask.cpu()
     __vocab_summary = {
-        __key: deformers.pipelines.eval.summary_stats(__vocab_metrics[__key], __vocab_mask_cpu)
-        for __key in __vocab_metrics}
+        'embed_mse': deformers.pipelines.eval.summary_stats(__v_embed_mse, __vocab_mask_cpu),
+        'embed_cos': deformers.pipelines.eval.summary_stats(__v_embed_cos, __vocab_mask_cpu),}
 
     print('[eval] vocab probe summary:')
     for __key, __stats in __vocab_summary.items():
@@ -495,11 +446,11 @@ if EVAL_CFG['vocab_probe']:
                 f'benchmark/vocab_probe/{__key}/{__stat_name}', __val, global_step=0)
 
     # build per-token table: flatten (B, T) positions and decode token IDs
-    __flat_ids = [__i for __row in __vocab_ids_list for __i in __row]
+    __flat_ids = __vocab_ids.flatten().tolist()
     __flat_strings = [TEXT_TOK.decode([__i]) for __i in __flat_ids]
     __flat_metrics = {
-        __key: __vocab_metrics[__key].flatten().tolist()
-        for __key in __vocab_metrics}
+        'embed_mse': __v_embed_mse.flatten().tolist(),
+        'embed_cos': __v_embed_cos.flatten().tolist(),}
     __table = deformers.pipelines.eval.token_table(
         token_ids=__flat_ids,
         token_strings=__flat_strings,
@@ -510,24 +461,24 @@ if EVAL_CFG['vocab_probe']:
     __sorted_easy = sorted(__table, key=lambda __r: __r['embed_mse'])
 
     print(f'\n[eval] 10 hardest tokens (by embed_mse):')
-    print(f'  {"id":>8}  {"token":<20}  {"bytes":>5}  {"embed_mse":>10}  {"embed_cos":>10}  {"kl":>10}')
+    print(f'  {"id":>8}  {"token":<20}  {"bytes":>5}  {"embed_mse":>10}  {"embed_cos":>10}')
     for __row in __sorted_hard[:10]:
         print(f'  {__row["token_id"]:>8}  {repr(__row["token_string"]):<20}  '
               f'{__row["byte_length"]:>5}  {__row["embed_mse"]:>10.6f}  '
-              f'{__row["embed_cos"]:>10.6f}  {__row["kl"]:>10.6f}')
+              f'{__row["embed_cos"]:>10.6f}')
 
     print(f'\n[eval] 10 easiest tokens (by embed_mse):')
-    print(f'  {"id":>8}  {"token":<20}  {"bytes":>5}  {"embed_mse":>10}  {"embed_cos":>10}  {"kl":>10}')
+    print(f'  {"id":>8}  {"token":<20}  {"bytes":>5}  {"embed_mse":>10}  {"embed_cos":>10}')
     for __row in __sorted_easy[:10]:
         print(f'  {__row["token_id"]:>8}  {repr(__row["token_string"]):<20}  '
               f'{__row["byte_length"]:>5}  {__row["embed_mse"]:>10.6f}  '
-              f'{__row["embed_cos"]:>10.6f}  {__row["kl"]:>10.6f}')
+              f'{__row["embed_cos"]:>10.6f}')
 
     REPORT['vocab_probe'] = {
-        'summary':       __vocab_summary,
-        'hardest_10':    __sorted_hard[:10],
-        'easiest_10':    __sorted_easy[:10],
-        'full_table':    __table,}
+        'summary': __vocab_summary,
+        'hardest_10': __sorted_hard[:10],
+        'easiest_10': __sorted_easy[:10],
+        'full_table': __table,}
 
 # SAVE REPORT ##################################################################
 
