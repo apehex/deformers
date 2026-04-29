@@ -135,14 +135,14 @@ Secondary checks:
 
 ## Near-term tasks
 
-1. [ ] update evaluation script:
-   - [ ] rewrite `scripts/benchmark.py` using latest `deformers` and `mlable` APIs
-   - [ ] fixed validation subset (`train[90%:]`)
-   - [ ] teacher vs student logits comparison (top-1, top-k set, top-k order, logit KL)
-   - [ ] cosine similarity and norm metrics on embeddings and hidden states
-   - [ ] fixed sentence probe: teacher vs student top-k tokens
-   - [ ] vocab probe: deterministic (B, T) token tensor evaluation
-   - [ ] shared helpers in `src/deformers/pipelines/eval.py`
+1. [x] update evaluation script:
+   - [x] rewrite `scripts/benchmark.py` using latest `deformers` and `mlable` APIs
+   - [x] fixed validation subset (`train[90%:]`)
+   - [x] teacher vs student logits comparison (top-1, top-k set, top-k order, logit KL)
+   - [x] cosine similarity and norm metrics on embeddings and hidden states
+   - [x] fixed sentence probe: teacher vs student top-k tokens
+   - [x] vocab probe: deterministic (B, T) token tensor evaluation
+   - [x] shared helpers in `src/deformers/pipelines/eval.py`
 2. [ ] define stop criteria:
    - [ ] early stop on cosine similarity + top-k exact order plateau
 3. [ ] export and load pipeline:
@@ -159,12 +159,12 @@ Objective: understand current error distribution before changing the architectur
 
 ## Token-wise Error Analysis
 
-- [ ] per-token table: report embed MSE, cosine similarity, hidden MSE, and logit KL for every token in a fixed probe batch
+- [x] per-token table: report embed MSE, cosine similarity, hidden MSE, and logit KL for every token in a fixed probe batch
 - [ ] break down errors by:
   - [ ] token frequency (common vs rare tokens)
   - [ ] byte length (short tokens, long tokens, truncated tokens)
   - [ ] token type (leading-space tokens, punctuation, long-byte / binary tokens)
-- [ ] identify which token classes drive the highest loss
+- [x] identify which token classes drive the highest loss
 
 ## Geometry Diagnostics
 
@@ -187,8 +187,8 @@ Objective: understand current error distribution before changing the architectur
 
 - [ ] multi-depth hidden-state MSE and cosine similarity: track at several trunk depths (not only depth k)
 - [ ] add cosine similarity, logit KL, and top-k metrics directly in the training validation loop
-- [ ] fixed vocab probe: deterministic (B, T) tensor covering uniform token distribution, tracked every N steps
-- [ ] fixed sentence probe: teacher vs student logits on a fixed sentence, tracked every N steps
+- [x] fixed vocab probe: deterministic (B, T) tensor covering uniform token distribution, tracked every N steps
+- [x] fixed sentence probe: teacher vs student logits on a fixed sentence, tracked every N steps
 
 ## Data Strategy
 

@@ -1,29 +1,37 @@
 """
 Evaluation script for prefix patch experiments.
 
-Loads a teacher model and an alternative prefix from a checkpoint, then
-computes and prints summary metrics over a fixed evaluation split.
+Loads a frozen teacher model and a trained prefix checkpoint, then computes
+detailed metrics over a fixed evaluation split and two deterministic probes.
 
 Assumptions:
 - Base model is qwen/qwen3.5-9b with hidden_size=4096.
 - Tokenizer boundaries are identical to the base model.
 - Trunk is frozen; prefix checkpoint is required (local path or HF repo).
-- Byte block size default follows docs/roadmap.md (L_max=32), configurable.
+- Byte block size default follows docs/roadmap.md (patch_dim=32), configurable.
 - The byte tokenizer uses pad_id=128 (as implemented by ByteTokenizer).
 - Memory-safe defaults: small batch, mixed precision on CUDA.
+- Colab: upload checkpoint to /content/checkpoints/prefix.pt before running.
 
 Metrics computed:
-- embedding MSE
-- hidden-state MSE at the configured trunk depth
-- KL divergence (teacher logits vs student logits)
-- top-k match rate (ordered)
+- eval loop (real text): embedding MSE/cosine, hidden-state MSE/cosine, logit KL, top-1/top-k
+- sentence and vocab probes: embedding MSE and cosine similarity only (hidden-state and
+  logit metrics are unreliable on fixed token sequences without global context)
 
-Optional probes:
-- fixed sentence probe: teacher vs student top-k tokens for the same contexts
-- vocab probe: metrics on a deterministic (B, T) token tensor
+Probes:
+- fixed sentence probe: embed MSE and cosine per sentence
+- vocab probe: deterministic (B, T) token tensor; per-token embed MSE/cosine table
+
+Outputs:
+- detailed stdout logs
+- TensorBoard scalars under benchmark/ in .logs/
+- JSON report artifact in .logs/benchmark_<timestamp>.json
 """
 
 import contextlib
+import datetime
+import functools
+import json
 import os
 
 import datasets
@@ -31,15 +39,19 @@ import huggingface_hub
 import torch
 import torch.amp
 import torch.nn
-import torch.nn.functional
+import torch.utils.tensorboard
 import transformers
 
+import mlable.losses
+import mlable.metrics
 import mlable.models
 
-import deformers.layers.prefix
+import deformers.datasets.random
 import deformers.models.generic
+import deformers.models.prefix
 import deformers.pipelines.eval
 import deformers.pipelines.patch
+import deformers.pipelines.prefix
 import deformers.tokenizers.byte
 
 # COMMON CONFIG ################################################################
@@ -47,12 +59,13 @@ import deformers.tokenizers.byte
 MAIN_CFG = {
     'model_str': 'qwen/qwen3.5-9b',
     'device_str': 'cuda' if torch.cuda.is_available() else 'cpu',
+    'dtype_obj': torch.bfloat16,
     'encoding_str': 'utf-8',
     'seed_num': 1337,
     'batch_dim': 4,
     'sequence_dim': 256,
     'patch_dim': 32,
-    'depth_num': 4,
+    'depth_num': 1,
     'batch_num': 16,
     'topk_num': 10,}
 
@@ -61,7 +74,7 @@ MAIN_CFG = {
 DATASET_CFG = {
     'path': 'wikimedia/wikipedia',
     'name': '20231101.en',
-    'split': 'train[90%:]',  # small bounded eval split
+    'split': 'train[90%:]',
     'streaming': False,}
 
 BATCH_CFG = {
@@ -70,6 +83,18 @@ BATCH_CFG = {
     'patch_dim': MAIN_CFG['patch_dim'],}
 
 # PREPROCESSING CONFIG #########################################################
+
+PREPROC_CFG = {
+    'truncation': 'longest_first',
+    'padding': 'max_length',
+    'max_length': BATCH_CFG['sequence_dim'],}
+
+VECTORIZE_CFG = {
+    'sequence_dim': BATCH_CFG['sequence_dim'],
+    'patch_dim': BATCH_CFG['patch_dim'],
+    'device_str': MAIN_CFG['device_str'],
+    'dtype_obj': torch.long,
+    'left_pad': True,}
 
 TOKEN_CFG = {
     'pretrained_model_name_or_path': MAIN_CFG['model_str'],
@@ -93,18 +118,31 @@ CONFIG_CFG = {
 MODEL_CFG = {
     'pretrained_model_name_or_path': DOWNLOAD_CFG['local_dir'],
     'trust_remote_code': CONFIG_CFG['trust_remote_code'],
-    'torch_dtype': torch.bfloat16,
+    'dtype': torch.bfloat16,
     'low_cpu_mem_usage': True,
     'ignore_mismatched_sizes': True,}
+
+PREFIX_CFG = {
+    'embed_dim': 128,
+    'patch_dim': -1,
+    'hidden_dim': 4096,
+    'output_dim': 4096,
+    'vocab_dim': 256,
+    'padding_idx': 128,
+    'block_num': 4,
+    'head_num': 4,
+    'dropout_rate': 0.001,}
 
 # CHECKPOINT CONFIG ############################################################
 
 REPOSITORY_CFG = {
-    'repo_path': '',}
+    'repo_path': '',}  # optional HF repo to download checkpoint from
 
 CHECKPOINT_CFG = {
-    'file_path': os.path.abspath('checkpoints/prefix.pt'),
-    'device_str': MAIN_CFG['device_str'],}
+    'path': os.environ.get('BENCHMARK_CHECKPOINT', '/content/checkpoints/prefix.pt'),
+    'device': MAIN_CFG['device_str'],}
+# NOTE: default path /content/checkpoints/prefix.pt targets Colab.
+# Override via: BENCHMARK_CHECKPOINT=/path/to/prefix.pt python scripts/benchmark.py
 
 # EVAL CONFIG ##################################################################
 
@@ -116,103 +154,20 @@ EVAL_CFG = {
         'In the beginning was the Word, and the Word was with God.',],
     'vocab_probe': True,}
 
-# UTILS ########################################################################
+# OUTPUT CONFIG ################################################################
 
-def save_checkpoint(
-    model_obj: torch.nn.Module,
-    path_str: str=CHECKPOINT_CFG['file_path'],
-) -> None:
-    torch.save(
-        {
-            'config': model_obj._config,
-            'state_dict': model_obj.state_dict()},
-        path_str)
+_TIMESTAMP = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H%M%SZ')
 
-def load_checkpoint(
-    file_path: str='prefix.pt',
-    device_str: str='cpu',
-) -> object:
-    """Load a model from a local checkpoint or HF hub path."""
-    # check the disk
-    assert os.path.isfile(file_path), f'model checkpoint not found: {file_path}'
-    # parse the data
-    __ckpt = torch.load(file_path, map_location=device_str, weights_only=True)
-    # instantiate the model
-    __prefix = deformers.layers.prefix.CompositeBytePrefix(**__ckpt['config'])
-    # load the weights
-    __prefix.load_state_dict(__ckpt['state_dict'])
-    # alternative transformer prefix
-    return __prefix.to(device=device_str)
-
-def build_vocab_probe(
-    vocab_dim: int,
-    batch_dim: int,
-    seq_dim: int,
-) -> torch.Tensor:
-    """Build a deterministic (B, T) token id tensor using consecutive vocab IDs."""
-    __total = batch_dim * seq_dim
-    __ids = torch.arange(__total, dtype=torch.long) % vocab_dim
-    return __ids.reshape(batch_dim, seq_dim)
-
-def build_text_probe(
-    texts_arr: list,
-    text_tokenizer: object,
-    byte_tokenizer: object,
-    seq_dim: int=256,
-    patch_dim: int=32,
-    device_str: str='cpu',
-) -> tuple:
-    """Build a deterministic fixed probe batch from text samples."""
-    __inputs = text_tokenizer(
-        texts_arr,
-        return_offsets_mapping=True,
-        max_length=seq_dim,
-        truncation='longest_first',
-        padding='max_length')
-    __encoded = deformers.pipelines.patch.tokenize_into_bytes(
-        texts_arr=texts_arr,
-        offsets_arr=__inputs['offset_mapping'],
-        patch_dim=patch_dim,
-        tokenizer_obj=byte_tokenizer)
-    __tokens_arr = torch.tensor(__inputs['input_ids'], dtype=torch.long, device=device_str)
-    __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.long, device=device_str)
-    __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=device_str)
-    return __tokens_arr, __mask_arr, __bytes_arr
-
-def build_vocab_probe_bytes(
-    vocab_ids: torch.Tensor,
-    text_tokenizer: object,
-    byte_tokenizer: object,
-    patch_dim: int=32,
-) -> torch.Tensor:
-    """Build byte patch tensor (B, T, G) from a (B, T) vocab probe token id tensor."""
-    __B, __T = vocab_ids.shape
-    __flat = vocab_ids.flatten().tolist()
-    # decode each token id to its actual text representation
-    __strings = [text_tokenizer.decode([__tid], skip_special_tokens=False) for __tid in __flat]
-    # reshape into (B, T) list of lists
-    __tokens_2d = [__strings[__i * __T:(__i + 1) * __T] for __i in range(__B)]
-    # encode each token string as a fixed-length byte block
-    __encoded = deformers.pipelines.patch.encode_into_bytes(
-        tokens_arr=__tokens_2d,
-        patch_dim=patch_dim,
-        tokenizer_obj=byte_tokenizer)
-    return torch.tensor(__encoded, dtype=torch.long, device=vocab_ids.device)
+LOGGING_CFG = {
+    'log_dir': os.path.abspath('.logs'),
+    'report_path': os.path.abspath(f'.logs/benchmark_{_TIMESTAMP}.json'),}
 
 # MIXED PRECISION ##############################################################
 
 MIXED_CTX = (
-    torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
+    torch.amp.autocast(device_type='cuda', dtype=MAIN_CFG['dtype_obj'])
     if MAIN_CFG['device_str'] == 'cuda'
     else contextlib.nullcontext())
-
-# DATASET ######################################################################
-
-print('[init] downloading the dataset...')
-DATASET_OBJ = datasets.load_dataset(**DATASET_CFG)
-
-print('[init] preprocessing the dataset...')
-DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed_num'])
 
 # TOKENIZERS ###################################################################
 
@@ -220,10 +175,31 @@ print('[init] loading the tokenizers...')
 TEXT_TOK = transformers.AutoTokenizer.from_pretrained(**TOKEN_CFG)
 BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(**BYTE_CFG)
 
+print('[init] defining a padding token...')
+TEXT_TOK.pad_token = TEXT_TOK.pad_token or TEXT_TOK.eos_token
+
+print('[init] calculating the tokenizer metadata...')
+VOCAB_LEN = len(TEXT_TOK.get_vocab())
+
+# DATASET ######################################################################
+
+print('[init] downloading the dataset...')
+DATASET_OBJ = datasets.load_dataset(**DATASET_CFG)
+
+print('[init] shuffling the dataset...')
+DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed_num'])
+
+print('[init] preprocessing the dataset...')
+DATASET_OBJ = DATASET_OBJ.map(
+    lambda __s: {'indices': TEXT_TOK(__s['text'], **PREPROC_CFG)['input_ids']},
+    batched=True,
+    remove_columns=['text'])
+
 # MODELS #######################################################################
 
 print('[init] creating the output directories...')
 os.makedirs(DOWNLOAD_CFG['local_dir'], exist_ok=True)
+os.makedirs(LOGGING_CFG['log_dir'], exist_ok=True)
 
 print('[init] downloading the teacher...')
 huggingface_hub.snapshot_download(**DOWNLOAD_CFG)
@@ -235,7 +211,7 @@ print('[init] truncating the config...')
 TRUNK_CFG = deformers.models.generic.truncate_config(
     TRUNK_CFG, layer_num=MAIN_CFG['depth_num'], target_key='text_config')
 
-print('[init] loading the teacher...')  # load only the used layers up to the chosen depth
+print('[init] loading the teacher...')
 SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(
     config=TRUNK_CFG, **MODEL_CFG).to(device=MAIN_CFG['device_str'])
 
@@ -246,79 +222,127 @@ mlable.models.freeze(SOURCE_MOD)
 print('[init] freeing unused memory...')
 mlable.models.free_memory()
 
+# CHECKPOINT ###################################################################
+
 if REPOSITORY_CFG['repo_path']:
     print('[init] downloading the prefix checkpoint...')
     huggingface_hub.hf_hub_download(
         repo_id=REPOSITORY_CFG['repo_path'],
-        filename=os.path.basename(CHECKPOINT_CFG['file_path']),
-        local_dir=os.path.dirname(CHECKPOINT_CFG['file_path']),
+        filename=os.path.basename(CHECKPOINT_CFG['path']),
+        local_dir=os.path.dirname(CHECKPOINT_CFG['path']),
         repo_type='model')
 
-print('[init] loading the prefix weights...')
-PREFIX_MOD = load_checkpoint(**CHECKPOINT_CFG)
+print(f'[init] loading the prefix checkpoint from {CHECKPOINT_CFG["path"]}...')
+PREFIX_MOD = deformers.models.prefix.CompositeBytePrefix.load_checkpoint(
+    path=CHECKPOINT_CFG['path'],
+    shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
+    device=CHECKPOINT_CFG['device'])
 PREFIX_MOD.eval()
 
-print('[init] building the prefix...')
-PREFIX_MOD._build(
-    shape_arr=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
-    device_str=MAIN_CFG['device_str'])
+# UTILITIES ####################################################################
 
-# ACCUMULATORS #################################################################
+print('[init] creating specialized utilities...')
 
-__n_batches = 0
-__sum_embed_mse = 0.0
-__sum_hidden_mse = 0.0
-__sum_kl = 0.0
-__sum_topk = 0.0
+vectorize = functools.partial(
+    deformers.pipelines.prefix.vectorize_indices,
+    text_tok=TEXT_TOK,
+    byte_tok=BYTE_TOK,
+    **VECTORIZE_CFG)
+
+def embed(
+    indices_arr: torch.Tensor,
+    model_obj: object=SOURCE_MOD,
+) -> torch.Tensor:
+    """Get teacher token embeddings (no grad)."""
+    return model_obj.model.embed_tokens(indices_arr)
+
+def forward(
+    embeds_arr: torch.Tensor,
+    mask_arr: torch.Tensor,
+    model_obj: object=SOURCE_MOD,
+) -> torch.Tensor:
+    """Run the trunk and return the last hidden state (no grad)."""
+    return model_obj.model(
+        inputs_embeds=embeds_arr,
+        attention_mask=mask_arr,
+        use_cache=False).last_hidden_state
+
+def logits(
+    hidden_arr: torch.Tensor,
+    model_obj: object=SOURCE_MOD,
+) -> torch.Tensor:
+    """Project hidden states to vocabulary logits."""
+    return model_obj.lm_head(hidden_arr)
+
+# TENSORBOARD ##################################################################
+
+print(f'[init] opening TensorBoard writer at {LOGGING_CFG["log_dir"]}...')
+LOG_TB = torch.utils.tensorboard.SummaryWriter(log_dir=LOGGING_CFG['log_dir'])
+
+# REPORT ACCUMULATOR ###########################################################
+
+REPORT = {
+    'timestamp': _TIMESTAMP,
+    'model': MAIN_CFG['model_str'],
+    'checkpoint': CHECKPOINT_CFG['path'],
+    'eval_split': DATASET_CFG['split'],
+    'batch_num': EVAL_CFG['batch_num'],
+    'topk_num': EVAL_CFG['topk_num'],
+    'eval_loop': {},
+    'sentence_probe': {},
+    'vocab_probe': {},}
 
 # EVALUATION LOOP ##############################################################
 
-print('[eval] starting evaluation...')
+print('[eval] starting evaluation loop...')
+
+__n_batches = 0
+__acc = {
+    'embed_mse': 0.0,
+    'embed_cos': 0.0,
+    'hidden_mse': 0.0,
+    'hidden_cos': 0.0,
+    'kl': 0.0,
+    'top1': 0.0,
+    'topk': 0.0,}
+
 __dataset = DATASET_OBJ.iter(batch_size=BATCH_CFG['batch_dim'])
 
 for __batch in __dataset:
     if __n_batches >= EVAL_CFG['batch_num']:
         break
 
-    __texts = __batch['text']
-
-    # input_ids (B, T) and attention_mask (B, T)
-    __inputs = TEXT_TOK(
-        __texts,
-        return_offsets_mapping=True,
-        max_length=BATCH_CFG['sequence_dim'],
-        truncation='longest_first',
-        padding='max_length')
-
-    # byte patches (B, T, G)
-    __encoded = deformers.pipelines.patch.tokenize_into_bytes(
-        texts_arr=__texts,
-        offsets_arr=__inputs['offset_mapping'],
-        patch_dim=BATCH_CFG['patch_dim'],
-        tokenizer_obj=BYTE_TOK)
-
-    # format as tensors
-    __tokens_arr = torch.tensor(__inputs['input_ids'], dtype=torch.long, device=MAIN_CFG['device_str'])
-    __mask_arr = torch.tensor(__inputs['attention_mask'], dtype=torch.long, device=MAIN_CFG['device_str'])
-    __bytes_arr = torch.tensor(__encoded, dtype=torch.long, device=MAIN_CFG['device_str'])
+    # mask (B, T), tokens (B, T), bytes (B, T, G)
+    __mask_arr, __indices_arr, __bytes_arr = vectorize(__batch['indices'])
 
     with torch.no_grad():
-        # teacher forward: embeddings, residuals and logits (no grad)
-        __teacher_embeds = SOURCE_MOD.model.embed_tokens(__tokens_arr)
-        __teacher_residuals = SOURCE_MOD.model(inputs_embeds=__teacher_embeds, attention_mask=__mask_arr, use_cache=False).last_hidden_state
-        __teacher_logits = SOURCE_MOD.lm_head(__teacher_residuals)
+        # teacher: embeddings + hidden states + logits
+        __teacher_embeds  = embed(__indices_arr)
+        __teacher_hidden  = forward(__teacher_embeds, __mask_arr)
+        __teacher_logits  = logits(__teacher_hidden)
 
-        # student forward: prefix -> inputs_embeds -> trunk -> logits
+        # student: prefix bytes -> embeds -> same trunk -> logits
         with MIXED_CTX:
-            __student_embeds = PREFIX_MOD(__bytes_arr)
-        __student_residuals = SOURCE_MOD.model(inputs_embeds=__student_embeds, attention_mask=__mask_arr, use_cache=False).last_hidden_state
-        __student_logits = SOURCE_MOD.lm_head(__student_residuals)
+            __student_embeds = PREFIX_MOD(__bytes_arr).to(dtype=__teacher_embeds.dtype)
+        __student_hidden = forward(__student_embeds, __mask_arr)
+        __student_logits = logits(__student_hidden)
 
-    # accumulate metrics
-    __sum_embed_mse += torch.nn.functional.mse_loss(__teacher_embeds.float(), __student_embeds.float()).item()
-    __sum_hidden_mse += torch.nn.functional.mse_loss(__teacher_residuals.float(), __student_residuals.float()).item()
-    __sum_kl += deformers.pipelines.eval.kl_divergence(__teacher_logits.float(), __student_logits.float()).item()
-    __sum_topk += deformers.pipelines.eval.topk_rate(__teacher_logits, __student_logits, k_num=EVAL_CFG['topk_num']).item()
+    # per-position (B, T) masked metrics
+    __metrics = deformers.pipelines.eval.per_token_metrics(
+        teacher_embeds=__teacher_embeds,
+        student_embeds=__student_embeds,
+        teacher_hidden=__teacher_hidden,
+        student_hidden=__student_hidden,
+        teacher_logits=__teacher_logits,
+        student_logits=__student_logits,
+        mask=__mask_arr,
+        k_num=EVAL_CFG['topk_num'])
+
+    # accumulate masked means for each metric
+    __mask_cpu = __mask_arr.cpu()
+    for __key in __acc:
+        __acc[__key] += deformers.pipelines.eval.summary_stats(
+            __metrics[__key], __mask_cpu)['mean']
 
     __n_batches += 1
     if __n_batches % 4 == 0:
@@ -328,78 +352,149 @@ for __batch in __dataset:
 
 if __n_batches > 0:
     print('\n[eval] === summary metrics ===')
-    print(f'[eval] batches evaluated : {__n_batches}')
-    print(f'[eval] embed MSE         : {__sum_embed_mse / __n_batches:.6f}')
-    print(f'[eval] hidden MSE        : {__sum_hidden_mse / __n_batches:.6f}')
-    print(f'[eval] KL divergence     : {__sum_kl / __n_batches:.6f}')
-    print(f'[eval] top-k match       : {__sum_topk / __n_batches:.4f} (k={EVAL_CFG["topk_num"]})')
+    print(f'[eval] batches evaluated  : {__n_batches}')
+    __avgs = {__k: __v / __n_batches for __k, __v in __acc.items()}
+    for __key, __val in __avgs.items():
+        print(f'[eval] {__key:<18}: {__val:.6f}')
+
+    # log summary scalars to TensorBoard
+    for __key, __val in __avgs.items():
+        LOG_TB.add_scalar(f'benchmark/eval/{__key}', __val, global_step=0)
+
+    REPORT['eval_loop'] = {'n_batches': __n_batches, **__avgs}
 
 # FIXED SENTENCE PROBE #########################################################
 
 if EVAL_CFG['probe_sentences']:
     print('\n[eval] === fixed sentence probe ===')
-    __probe_tokens, __probe_mask, __probe_bytes = build_text_probe(
-        texts_arr=EVAL_CFG['probe_sentences'],
-        text_tokenizer=TEXT_TOK,
-        byte_tokenizer=BYTE_TOK,
-        seq_dim=BATCH_CFG['sequence_dim'],
+
+    # build probe tensors from raw text
+    __probe_mask, __probe_ids, __probe_bytes = deformers.pipelines.prefix.vectorize_strings(
+        text_arr=EVAL_CFG['probe_sentences'],
+        text_tok=TEXT_TOK,
+        byte_tok=BYTE_TOK,
+        sequence_dim=BATCH_CFG['sequence_dim'],
         patch_dim=BATCH_CFG['patch_dim'],
-        device_str=MAIN_CFG['device_str'])
+        device_str=MAIN_CFG['device_str'],
+        left_pad=True)
 
     with torch.no_grad():
-        __p_teacher_embeds = SOURCE_MOD.model.embed_tokens(__probe_tokens)
-        __p_teacher_residuals = SOURCE_MOD.model(inputs_embeds=__p_teacher_embeds, attention_mask=__probe_mask, use_cache=False).last_hidden_state
-        __p_teacher_logits = SOURCE_MOD.lm_head(__p_teacher_residuals)
+        __p_teacher_embeds = embed(__probe_ids)
         with MIXED_CTX:
-            __p_student_embeds = PREFIX_MOD(__probe_bytes)
-            __p_student_residuals = SOURCE_MOD.model(inputs_embeds=__p_student_embeds, attention_mask=__probe_mask, use_cache=False).last_hidden_state
-            __p_student_logits = SOURCE_MOD.lm_head(__p_student_residuals)
+            __p_student_embeds = PREFIX_MOD(__probe_bytes).to(dtype=__p_teacher_embeds.dtype)
 
-    __k = EVAL_CFG['topk_num']
+    __p_embed_mse = mlable.losses.mse_loss(
+        __p_student_embeds.float(), __p_teacher_embeds.float(),
+        mask_arr=__probe_mask, relative_opt=True, reduce_opt=False).cpu()
+    __p_embed_cos = mlable.losses.cos_sim(
+        __p_student_embeds.float(), __p_teacher_embeds.float(),
+        mask_arr=__probe_mask, reduce_opt=False).cpu()
+
+    __sentence_report = []
     for __i, __sent in enumerate(EVAL_CFG['probe_sentences']):
-        # report at the last real token position
-        __pos = int(__probe_mask[__i].sum().item()) - 1
-        __t_top = __p_teacher_logits[__i, __pos].topk(__k).indices.tolist()
-        __s_top = __p_student_logits[__i, __pos].topk(__k).indices.tolist()
-        __t_toks = TEXT_TOK.convert_ids_to_tokens(__t_top)
-        __s_toks = TEXT_TOK.convert_ids_to_tokens(__s_top)
+        __s_mask = __probe_mask[__i:__i + 1].cpu()
+        __s_mse = deformers.pipelines.eval.summary_stats(__p_embed_mse[__i:__i + 1], __s_mask)
+        __s_cos = deformers.pipelines.eval.summary_stats(__p_embed_cos[__i:__i + 1], __s_mask)
         print(f'[eval] sentence {__i}: "{__sent[:60]}"')
-        print(f'[eval] teacher top-{__k}: {__t_toks}')
-        print(f'[eval] student top-{__k}: {__s_toks}')
+        print(f'[eval]   embed_mse={__s_mse["mean"]:.4f}  embed_cos={__s_cos["mean"]:.4f}')
+        __sentence_report.append({
+            'sentence': __sent,
+            'embed_mse': __s_mse,
+            'embed_cos': __s_cos})
+
+    REPORT['sentence_probe'] = __sentence_report
 
 # VOCAB PROBE ##################################################################
 
 if EVAL_CFG['vocab_probe']:
     print('\n[eval] === vocab probe ===')
-    # resolve vocab size from text_config if available (multimodal models)
-    __vocab_size = (
-        SOURCE_MOD.config.text_config.vocab_size
-        if hasattr(SOURCE_MOD.config, 'text_config')
-        else SOURCE_MOD.config.vocab_size)
-    __vocab_ids = build_vocab_probe(
-        vocab_size=__vocab_size,
-        batch_dim=BATCH_CFG['batch_dim'],
-        seq_dim=BATCH_CFG['sequence_dim']).to(device=MAIN_CFG['device_str'])
 
-    # build corresponding byte patches by decoding each token to its text
-    __vocab_bytes = build_vocab_probe_bytes(
-        vocab_ids=__vocab_ids,
-        text_tokenizer=TEXT_TOK,
-        byte_tokenizer=BYTE_TOK,
-        patch_dim=BATCH_CFG['patch_dim']).to(device=MAIN_CFG['device_str'])
-
-    __vocab_mask = torch.ones_like(__vocab_ids)
+    # build tensors from the deterministic token ID grid
+    __vocab_mask, __vocab_ids, __vocab_bytes = vectorize(
+        deformers.pipelines.eval.indices_probe(
+            vocab_dim=VOCAB_LEN,
+            batch_dim=BATCH_CFG['batch_dim'],
+            sequence_dim=BATCH_CFG['sequence_dim']))
 
     with torch.no_grad():
-        __v_teacher_embeds = SOURCE_MOD.model.embed_tokens(__vocab_ids)
-        __v_teacher_residuals = SOURCE_MOD.model(inputs_embeds=__v_teacher_embeds, attention_mask=__vocab_mask, use_cache=False).last_hidden_state
-        __v_teacher_logits = SOURCE_MOD.lm_head(__v_teacher_residuals)
+        __v_teacher_embeds = embed(__vocab_ids)
         with MIXED_CTX:
-            __v_student_embeds = PREFIX_MOD(__vocab_bytes)
-            __v_student_residuals = SOURCE_MOD.model(inputs_embeds=__v_student_embeds, attention_mask=__vocab_mask, use_cache=False).last_hidden_state
-            __v_student_logits = SOURCE_MOD.lm_head(__v_student_residuals)
+            __v_student_embeds = PREFIX_MOD(__vocab_bytes).to(dtype=__v_teacher_embeds.dtype)
 
-    print(f'[eval] vocab embed MSE   : {torch.nn.functional.mse_loss(__v_teacher_embeds.float(), __v_student_embeds.float()).item():.6f}')
-    print(f'[eval] vocab hidden MSE  : {torch.nn.functional.mse_loss(__v_teacher_residuals.float(), __v_student_residuals.float()).item():.6f}')
-    print(f'[eval] vocab KL          : {deformers.pipelines.eval.kl_divergence(__v_teacher_logits.float(), __v_student_logits.float()):.6f}')
-    print(f'[eval] vocab top-k       : {deformers.pipelines.eval.topk_rate(__v_teacher_logits, __v_student_logits):.4f}')
+    __v_embed_mse = mlable.losses.mse_loss(
+        __v_student_embeds.float(), __v_teacher_embeds.float(),
+        mask_arr=__vocab_mask, relative_opt=True, reduce_opt=False).cpu()
+    __v_embed_cos = mlable.losses.cos_sim(
+        __v_student_embeds.float(), __v_teacher_embeds.float(),
+        mask_arr=__vocab_mask, reduce_opt=False).cpu()
+
+    __vocab_mask_cpu = __vocab_mask.cpu()
+    __vocab_summary = {
+        'embed_mse': deformers.pipelines.eval.summary_stats(__v_embed_mse, __vocab_mask_cpu),
+        'embed_cos': deformers.pipelines.eval.summary_stats(__v_embed_cos, __vocab_mask_cpu),}
+
+    print('[eval] vocab probe summary:')
+    for __key, __stats in __vocab_summary.items():
+        print(f'[eval]   {__key:<18}: mean={__stats["mean"]:.6f}'
+              f'  median={__stats["median"]:.6f}'
+              f'  p95={__stats["p95"]:.6f}')
+
+    # log vocab probe scalars to TensorBoard
+    for __key, __stats in __vocab_summary.items():
+        for __stat_name, __val in __stats.items():
+            LOG_TB.add_scalar(
+                f'benchmark/vocab_probe/{__key}/{__stat_name}', __val, global_step=0)
+
+    # build per-token table: flatten (B, T) positions and decode token IDs
+    __flat_ids = __vocab_ids.flatten().tolist()
+    __flat_strings = [TEXT_TOK.decode([__i]) for __i in __flat_ids]
+    __flat_metrics = {
+        'embed_mse': __v_embed_mse.flatten().tolist(),
+        'embed_cos': __v_embed_cos.flatten().tolist(),}
+    __table = deformers.pipelines.eval.token_table(
+        token_ids=__flat_ids,
+        token_strings=__flat_strings,
+        metrics=__flat_metrics)
+
+    # hardest tokens: top-10 by embed_mse
+    __sorted_hard = sorted(__table, key=lambda __r: __r['embed_mse'], reverse=True)
+    __sorted_easy = sorted(__table, key=lambda __r: __r['embed_mse'])
+
+    print(f'\n[eval] 10 hardest tokens (by embed_mse):')
+    print(f'  {"id":>8}  {"token":<20}  {"bytes":>5}  {"embed_mse":>10}  {"embed_cos":>10}')
+    for __row in __sorted_hard[:10]:
+        print(f'  {__row["token_id"]:>8}  {repr(__row["token_string"]):<20}  '
+              f'{__row["byte_length"]:>5}  {__row["embed_mse"]:>10.6f}  '
+              f'{__row["embed_cos"]:>10.6f}')
+
+    print(f'\n[eval] 10 easiest tokens (by embed_mse):')
+    print(f'  {"id":>8}  {"token":<20}  {"bytes":>5}  {"embed_mse":>10}  {"embed_cos":>10}')
+    for __row in __sorted_easy[:10]:
+        print(f'  {__row["token_id"]:>8}  {repr(__row["token_string"]):<20}  '
+              f'{__row["byte_length"]:>5}  {__row["embed_mse"]:>10.6f}  '
+              f'{__row["embed_cos"]:>10.6f}')
+
+    REPORT['vocab_probe'] = {
+        'summary': __vocab_summary,
+        'hardest_10': __sorted_hard[:10],
+        'easiest_10': __sorted_easy[:10],
+        'full_table': __table,}
+
+# SAVE REPORT ##################################################################
+
+print(f'\n[eval] saving JSON report to {LOGGING_CFG["report_path"]}...')
+deformers.pipelines.eval.save_json_report(REPORT, LOGGING_CFG['report_path'])
+
+print(f'[eval] closing TensorBoard writer...')
+LOG_TB.close()
+
+print('[eval] done.')
+
+# COLAB USAGE ##################################################################
+# Upload your checkpoint to /content/checkpoints/prefix.pt, then run:
+#   !python scripts/benchmark.py
+# or set a custom path:
+#   BENCHMARK_CHECKPOINT=/path/to/prefix.pt python scripts/benchmark.py
+# TensorBoard:
+#   %load_ext tensorboard
+#   %tensorboard --logdir .logs
