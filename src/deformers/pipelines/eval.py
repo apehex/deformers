@@ -7,7 +7,7 @@ Assumptions:
 - All reductions are over the full (B, T) batch; masking is caller responsibility.
 - Vocab probe uses top vocab IDs selected by a deterministic rule (sorted ascending by ID).
 - Text probe uses offset-based byte patching aligned to the base tokenizer boundaries.
-- Checkpoint format: dict with keys 'config' and 'state_dict'.
+- Checkpoint format: dict with keys 'config' and 'state'.
 """
 
 import math
