@@ -1,4 +1,5 @@
 import os.path
+import time
 
 import torch
 import torch.utils.tensorboard
@@ -33,6 +34,28 @@ def format_state(state: dict) -> dict:
         'gradient': f"(rate: {state['gradient/rate']:.2e} norm: {state['gradient/norm']:.4f})",
         'iter': f"(time: {state['iter/time'] * 1000.0:.0f} tok/s: {state['iter/tps']:.0f})",
         'vocab': f"(seen: {state['vocab/seen'] * 100.0:.1f}% min: {state['vocab/min']} max: {state['vocab/max']})",}
+
+# SPEED ########################################################################
+
+def prepare_throughput_callback(
+    step_num: int,
+    batch_len: int,
+) -> dict:
+    # test whether the callback should be run
+    def __trigger(state: dict) -> bool:
+        return (state['step/current'] % step_num) == 0
+    # write the state to the target file
+    def __operation(state: dict) -> None:
+        # time in seconds
+        state['iter/time'] = time.monotonic() - state['iter/start']
+        # tokens per second
+        state['iter/tps'] = deformers.pipelines.monitor.throughput(batch_len, state['iter/time'])
+    # format as a callback
+    return {
+        'name': 'speed',
+        'trigger': __trigger,
+        'operation': __operation,
+        'cleanup': noop,}
 
 # LOGGING ######################################################################
 
