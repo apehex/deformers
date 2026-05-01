@@ -90,40 +90,6 @@ def prepare_tensorboard_callback(
         'operation': __operation,
         'cleanup': __cleanup,}
 
-# PROGRESS #####################################################################
-
-def prepare_progress_callback(
-    step_num: int,
-    epoch_num: int,
-    epoch_tot: int,
-    dataset_obj: object,
-) -> dict:
-    # create a progress bar
-    __pbar = tqdm.tqdm(
-        dataset_obj,
-        total=len(dataset_obj),
-        desc=f'epoch {epoch_num}/{epoch_tot}',
-        unit='batch',
-        leave=True)
-    # test whether the callback should be run
-    def __trigger(state: dict) -> bool:
-        return (state['step/current'] % step_num) == 0
-    # write the state to the target file
-    def __operation(state: dict) -> None:
-        # aggregate and format
-        __stats = format_state(state=state)
-        # filter the epoch and step since they are already in the pbar
-        __pbar.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
-    # close the file on cleanup
-    def __cleanup() -> None:
-        __pbar.close()
-    # format as a callback
-    return {
-        'name': 'pbar',
-        'trigger': __trigger,
-        'operation': __operation,
-        'cleanup': __cleanup,}
-
 # CHECKPOINT ###################################################################
 
 def prepare_checkpoint_callback(
@@ -143,6 +109,28 @@ def prepare_checkpoint_callback(
     # format as a callback
     return {
         'name': 'save',
+        'trigger': __trigger,
+        'operation': __operation,
+        'cleanup': noop,}
+
+# PROGRESS #####################################################################
+
+def prepare_progress_callback(
+    step_num: int,
+    pbar_obj: object,
+) -> dict:
+    # test whether the callback should be run
+    def __trigger(state: dict) -> bool:
+        return (state['step/current'] % step_num) == 0
+    # write the state to the target file
+    def __operation(state: dict) -> None:
+        # aggregate and format
+        __stats = format_state(state=state)
+        # filter the epoch and step since they are already in the pbar
+        pbar_obj.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
+    # format as a callback
+    return {
+        'name': 'pbar',
         'trigger': __trigger,
         'operation': __operation,
         'cleanup': noop,}
