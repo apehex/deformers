@@ -265,11 +265,6 @@ class PrefixTrainer:
         __step_num = int(self._state['scalars']['step/current'])
         # only work every few steps, after accumulating the loss on a few batches
         if bool(self._state['scalars']['switch/grad']):
-            # track the loss EMA, default to the current loss for the first few steps
-            self._state['scalars']['loss/ema'] = mlable.utils.ema(
-                average=float(self._state['scalars']['loss/ema']),
-                current=float(self._state['scalars']['loss/total']),
-                factor=__ema_rate * float(__step_num > __ema_num))
             # gradient clipping; unscale first to get true grad norm
             self._scaler.unscale_(self._optimizer)
             self._state['scalars']['gradient/rate'] = _monitor.current_lr(self._optimizer)

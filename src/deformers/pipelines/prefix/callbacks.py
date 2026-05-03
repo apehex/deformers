@@ -57,6 +57,30 @@ def prepare_throughput_callback(
         'operation': __operation,
         'cleanup': noop,}
 
+# LOSS EMA #####################################################################
+
+def prepare_ema_callback(
+    every_num: int,
+    ema_num: int,
+    ema_rate: float,
+) -> dict:
+    # test whether the callback should be run
+    def __trigger(state: dict) -> bool:
+        return (state['step/current'] % every_num) == 0
+    # write the state to the target file
+    def __operation(state: dict) -> None:
+        # track the loss EMA, default to the current loss for the first few steps
+        state['loss/ema'] = mlable.utils.ema(
+            average=float(state['loss/ema']),
+            current=float(state['loss/total']),
+            factor=ema_rate * float(state['step/current'] > ema_num))
+    # format as a callback
+    return {
+        'name': 'speed',
+        'trigger': __trigger,
+        'operation': __operation,
+        'cleanup': noop,}
+
 # LOGGING ######################################################################
 
 def prepare_logging_callback(
