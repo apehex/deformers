@@ -64,10 +64,10 @@ class PrefixTrainer:
         gradient_cfg: dict,
         training_cfg: dict,
         logging_cfg: dict,
-        saving_cfg: dict={},
-        testing_cfg: dict={},
-        state_cfg: dict={},
-        callbacks_arr: list=[],
+        saving_cfg: dict=None,
+        testing_cfg: dict=None,
+        state_cfg: dict=None,
+        callbacks_arr: list=None,
     ) -> None:
         # text <=> bytes utilities
         self._text_tok = text_tok
@@ -87,12 +87,12 @@ class PrefixTrainer:
             'gradient': dict(gradient_cfg),
             'training': dict(training_cfg),
             'logging': dict(logging_cfg),
-            'testing': dict(testing_cfg),
-            'saving': dict(saving_cfg),}
+            'testing': dict(testing_cfg or {}),
+            'saving': dict(saving_cfg or {}),}
         # secondary operations performed at the end of the step
-        self._callbacks = list(callbacks_arr) or []
+        self._callbacks = list(callbacks_arr or [])
         # initialize the state with the provided values and defaults
-        self._state = self.init_state(dict(state_cfg))
+        self._state = self.init_state(dict(state_cfg or {}))
 
     # STATE ####################################################################
 
@@ -133,13 +133,15 @@ class PrefixTrainer:
         self,
         epoch_tot: int,
         dataset_obj: object,
+        column_str: str,
     ) -> None:
         """Run a named phase for one or more epochs."""
         for __epoch in range(epoch_tot):
             self.run_epoch(
                 epoch_num=__epoch,
                 epoch_tot=epoch_tot,
-                dataset_obj=dataset_obj)
+                dataset_obj=dataset_obj,
+                column_str=column_str)
 
     # EPOCH ####################################################################
 
@@ -154,10 +156,10 @@ class PrefixTrainer:
         # track the iteration counters
         self._state['scalars']['epoch/total'] = int(epoch_tot)
         self._state['scalars']['epoch/current'] = int(epoch_num) + 1
-        self._state['scalars']['step/total'] = int(step_tot)
+        self._state['scalars']['step/total'] = int(__step_tot)
         # create a fresh iterator on the dataset
         return tqdm.tqdm(
-            dataset_obj.iter(),
+            iter(dataset_obj),
             total=__step_tot,
             desc=f'epoch {epoch_num + 1}/{epoch_tot}',
             unit='batch',

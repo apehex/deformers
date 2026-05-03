@@ -51,7 +51,7 @@ def prepare_speed_callback(
         # tokens per second
         state['iter/tps'] = deformers.pipelines.monitor.throughput(every_num * batch_len, state['iter/time'])
         # reset the timer
-        state['iter/start'] time.monotonic()
+        state['iter/start'] = time.monotonic()
     # format as a callback
     return {
         'name': 'speed',
