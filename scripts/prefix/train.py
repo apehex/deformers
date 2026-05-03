@@ -89,6 +89,7 @@ DATASET_CFG = {
         'seed_num': MAIN_CFG['seed_num'],}}
 
 BATCH_CFG = {
+    'column_str': 'indices',
     'batch_dim': MAIN_CFG['batch_dim'],
     'sequence_dim': MAIN_CFG['sequence_dim'],
     'patch_dim': MAIN_CFG['patch_dim'],}

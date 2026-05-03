@@ -1,6 +1,6 @@
 [project]
 name = "deformers"
-version = "0.7.2"
+version = "0.8.0"
 description = "Reverse engineer transformer models."
 authors = [{ name = "apehex", email = "17317183+apehex@users.noreply.github.com" }]
 readme = ".github/README.md"
@@ -12,7 +12,7 @@ dependencies = [
     "transformers>=5.2",]
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["pytest", "tensorboard>=2.0"]
 
 [build-system]
 requires = ["hatchling"]

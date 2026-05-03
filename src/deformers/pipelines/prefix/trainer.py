@@ -64,10 +64,10 @@ class PrefixTrainer:
         gradient_cfg: dict,
         training_cfg: dict,
         logging_cfg: dict,
-        saving_cfg: dict=None,
-        testing_cfg: dict=None,
-        state_cfg: dict=None,
-        callbacks_arr: list=None,
+        saving_cfg: dict={},
+        testing_cfg: dict={},
+        state_cfg: dict={},
+        callbacks_arr: list=[],
     ) -> None:
         # text <=> bytes utilities
         self._text_tok = text_tok
@@ -87,12 +87,12 @@ class PrefixTrainer:
             'gradient': dict(gradient_cfg),
             'training': dict(training_cfg),
             'logging': dict(logging_cfg),
-            'testing': dict(testing_cfg or {}),
-            'saving': dict(saving_cfg or {}),}
+            'testing': dict(testing_cfg),
+            'saving': dict(saving_cfg),}
         # secondary operations performed at the end of the step
-        self._callbacks = callbacks_arr or []
+        self._callbacks = [__c for __c in callbacks_arr if _callbacks.is_callback(__c)]
         # initialize the state with the provided values and defaults
-        self._state = self.init_state(dict(state_cfg or {}))
+        self._state = self.init_state(dict(state_cfg))
 
     # STATE ####################################################################
 
@@ -369,15 +369,13 @@ class PrefixTrainer:
     def step_callbacks(self) -> None:
         """Run all triggered callbacks on the current state."""
         for __callback in self._callbacks:
-            if _callbacks.is_callback(__callback):
-                if __callback['trigger'](self._state['scalars']):
-                    __callback['operation'](self._state['scalars'])
+            if __callback['trigger'](self._state['scalars']):
+                __callback['operation'](self._state['scalars'])
 
     def cleanup_callbacks(self) -> None:
         """Run cleanup on all registered callbacks."""
         for __callback in self._callbacks:
-            if _callbacks.is_callback(__callback):
-                __callback['cleanup']()
+            __callback['cleanup']()
 
     # PROGRESS #################################################################
 
