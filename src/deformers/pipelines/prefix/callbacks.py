@@ -63,8 +63,8 @@ def prepare_speed_callback(
 
 def prepare_ema_callback(
     every_num: int,
-    ema_num: int,
-    ema_rate: float,
+    start_num: int,
+    smooth_rate: float,
 ) -> dict:
     # test whether the callback should be run
     def __trigger(state: dict) -> bool:
@@ -75,10 +75,10 @@ def prepare_ema_callback(
         state['loss/ema'] = mlable.utils.ema(
             average=float(state['loss/ema']),
             current=float(state['loss/total']),
-            factor=ema_rate * float(state['step/current'] > ema_num))
+            factor=smooth_rate * float(state['step/current'] > start_num))
     # format as a callback
     return {
-        'name': 'speed',
+        'name': 'ema',
         'trigger': __trigger,
         'operation': __operation,
         'cleanup': noop,}
@@ -125,10 +125,8 @@ def prepare_tensorboard_callback(
         return (state['step/current'] % every_num) == 0
     # write the state to the target file
     def __operation(state: dict) -> None:
-        # filter out the tensors
-        __state = {__k: __v for (__k, __v) in state.items() if not 'inputs' in __k}
         # write all the scalars
-        deformers.pipelines.monitor.log_scalars(writer=__writer, step=state['step/current'], scalars=__state)
+        deformers.pipelines.monitor.log_scalars(writer=__writer, step=state['step/current'], scalars=state)
     # close the file on cleanup
     def __cleanup() -> None:
         __writer.close()
@@ -141,7 +139,7 @@ def prepare_tensorboard_callback(
 
 # CHECKPOINT ###################################################################
 
-def prepare_checkpoint_callback(
+def prepare_saving_callback(
     every_num: int,
     path_str: str,
     model_obj: object,
