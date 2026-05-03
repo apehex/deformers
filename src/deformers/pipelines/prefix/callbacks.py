@@ -5,6 +5,8 @@ import torch
 import torch.utils.tensorboard
 import tqdm
 
+import mlable.utils
+
 import deformers.pipelines.monitor
 
 # GENERIC ######################################################################
