@@ -51,6 +51,7 @@ import deformers.pipelines.eval
 import deformers.pipelines.monitor
 import deformers.pipelines.patch
 import deformers.pipelines.prefix
+import deformers.pipelines.prefix.callbacks
 import deformers.tokenizers.byte
 
 # COMMON CONFIG ################################################################
@@ -100,8 +101,9 @@ PREPROC_CFG = {
 VECTORIZE_CFG = {
     'sequence_dim': BATCH_CFG['sequence_dim'],
     'patch_dim': BATCH_CFG['patch_dim'],
-    'device_str': MAIN_CFG['device_str'],
+    'device_str': TRAINING_CFG['device_str'],
     'dtype_obj': torch.long,
+    'padding_str': '',
     'left_pad': True,}
 
 # PREPROCESSING CONFIG #########################################################
@@ -146,6 +148,8 @@ PREFIX_CFG = {
 # TRAINING CONFIG ##############################################################
 
 TRAINING_CFG = {
+    'dtype_obj': MAIN_CFG['dtype_obj'],
+    'device_str': MAIN_CFG['device_str'],
     'epoch_num': MAIN_CFG['epoch_num'],}
 
 OPTIMIZER_CFG = {
@@ -154,10 +158,10 @@ OPTIMIZER_CFG = {
     'weight_decay': 0.01,}
 
 SCALER_CFG = {
-    'enabled': MAIN_CFG['dtype_obj'] == torch.float16,}
+    'enabled': TRAINING_CFG['dtype_obj'] == torch.float16,}
 
 GRADIENT_CFG = {
-    'step_num': MAIN_CFG['accumulation_num'],
+    'every_num': MAIN_CFG['accumulation_num'],
     'max_norm': 1.0,}
 
 SCHEDULER_CFG = { # counted in acc steps (not micro steps)
@@ -167,12 +171,16 @@ SCHEDULER_CFG = { # counted in acc steps (not micro steps)
     'warmup_num': 128,}
 
 LOSS_CFG = {
-    'step_num': GRADIENT_CFG['step_num'],
     'mse_0_rate': 1.0,
     'mse_k_rate': 0.1,
     'cos_0_rate': 1.0,
     'cos_k_rate': 0.1,
     'relative_opt': True,}
+
+EMA_CFG = {
+    'every_num': GRADIENT_CFG['every_num'],
+    'start_num': 256,
+    'smooth_rate': 0.99,}
 
 # TESTING CONFIG ###############################################################
 
@@ -206,13 +214,21 @@ STATE_CFG = {
     'gpu/memory/allocated': lambda __x: 0.0,
     'gpu/memory/reserved': lambda __x: 0.0,}
 
-LOGGING_CFG = {
-    'step_num': MAIN_CFG['logging_num'],
-    'log_path': os.path.abspath('logs/prefix.log'),}
+SPEED_CFG = {
+    'every_num': GRADIENT_CFG['every_num'],
+    'batch_len': BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'],}
 
-CHECKPOINT_CFG = {
-    'step_num': MAIN_CFG['checkpoint_num'],
-    'save_path': os.path.abspath('checkpoints/prefix.pt'),}
+LOGGING_CFG = {
+    'every_num': MAIN_CFG['logging_num'],
+    'path_str': os.path.abspath('logs/prefix.log'),}
+
+TBOARD_CFG = {
+    'every_num': MAIN_CFG['logging_num'],
+    'path_str': os.path.abspath('logs/'),}
+
+SAVING_CFG = {
+    'every_num': MAIN_CFG['checkpoint_num'],
+    'path_str': os.path.abspath('checkpoints/prefix.pt'),}
 
 # TOKENIZERS ###################################################################
 
@@ -247,15 +263,13 @@ DATASET_OBJ = datasets.concatenate_datasets([DATASETS['random'], DATASETS['wikip
 
 print('[init] calculating the training metadata...')
 DATASET_DIM = len(DATASET_OBJ) // BATCH_CFG['batch_dim']
-BATCH_LEN = BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'] * GRADIENT_CFG['step_num']
-SCHEDULER_CFG['total_num'] = (2 * DATASET_DIM) // GRADIENT_CFG['step_num']
+BATCH_LEN = BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'] * GRADIENT_CFG['every_num']
+SCHEDULER_CFG['total_num'] = (2 * DATASET_DIM) // GRADIENT_CFG['every_num']
 
 # MODELS #######################################################################
 
 print('[init] creating the output directories...')
 os.makedirs(DOWNLOAD_CFG['local_dir'], exist_ok=True)
-os.makedirs(os.path.dirname(LOGGING_CFG['log_path']), exist_ok=True)
-os.makedirs(os.path.dirname(CHECKPOINT_CFG['save_path']), exist_ok=True)
 
 print('[init] downloading the teacher...')
 huggingface_hub.snapshot_download(**DOWNLOAD_CFG)
@@ -267,24 +281,24 @@ print('[init] truncating the config...')
 TRUNK_CFG = deformers.models.generic.truncate_config(TRUNK_CFG, layer_num=MAIN_CFG['depth_num'], target_key='text_config')
 
 print('[init] loading the teacher...') # load only the used layers, up to the chose depth
-SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(config=TRUNK_CFG, **MODEL_CFG).to(device=MAIN_CFG['device_str'])
+SOURCE_MOD = transformers.AutoModelForCausalLM.from_pretrained(config=TRUNK_CFG, **MODEL_CFG).to(device=TRAINING_CFG['device_str'])
 
 print('[init] freezing the teacher...')
 SOURCE_MOD.eval()
 mlable.models.freeze(SOURCE_MOD)
 
 print('[init] creating the student...')
-PREFIX_MOD = deformers.models.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
-if MAIN_CFG['resume_opt'] and os.path.exists(CHECKPOINT_CFG['save_path']):
+PREFIX_MOD = deformers.models.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=TRAINING_CFG['device_str'])
+if MAIN_CFG['resume_opt'] and os.path.exists(SAVING_CFG['path_str']):
     PREFIX_MOD = deformers.models.prefix.CompositeBytePrefix.load_checkpoint(
-        path=CHECKPOINT_CFG['save_path'],
+        path=SAVING_CFG['path_str'],
         shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
-        device=MAIN_CFG['device_str'])
+        device=TRAINING_CFG['device_str'])
 
 print('[init] building the student...')
 PREFIX_MOD.build(
     shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
-    device=MAIN_CFG['device_str'],
+    device=TRAINING_CFG['device_str'],
     dtype=torch.float32)
 
 # OPTIMIZER ####################################################################
@@ -298,22 +312,15 @@ SCHEDULER_OBJ = mlable.schedulers.WaveLR(optimizer_obj=OPTIMIZER_OBJ, **SCHEDULE
 
 print('[init] enabling mixed precision...')
 MIXED_CTX = (
-    torch.amp.autocast(device_type=MAIN_CFG['device_str'], dtype=MAIN_CFG['dtype_obj'])
-    if (MAIN_CFG['dtype_obj'] != torch.float32)
+    torch.amp.autocast(device_type=TRAINING_CFG['device_str'], dtype=TRAINING_CFG['dtype_obj'])
+    if (TRAINING_CFG['dtype_obj'] != torch.float32)
     else contextlib.nullcontext())
-
-# LOGGING ######################################################################
-
-print('[init] logging to {}...'.format(os.path.dirname(LOGGING_CFG['log_path'])))
-LOG_TB = torch.utils.tensorboard.SummaryWriter(log_dir=os.path.dirname(LOGGING_CFG['log_path']))
-LOG_FILE = open(LOGGING_CFG['log_path'], 'w')
 
 # ZERO #########################################################################
 
 print('[init] zeroing the state...')
 __step = 0
 __state = deformers.pipelines.monitor.reset_state(state={__k: 0.0 for __k in STATE_CFG}, update=STATE_CFG)
-__count = torch.zeros(size=(VOCAB_LEN,), dtype=torch.long, device='cpu')
 
 OPTIMIZER_OBJ.zero_grad()
 
@@ -357,6 +364,23 @@ def format_state(state: dict) -> dict:
         'gradient': f"(rate: {state['gradient/rate']:.2e} norm: {state['gradient/norm']:.4f})",
         'iter': f"(time: {state['iter/time'] * 1000.0:.0f} tok/s: {state['iter/tps']:.0f})",
         'vocab': f"(seen: {state['vocab/seen'] * 100.0:.1f}% min: {state['vocab/min']} max: {state['vocab/max']})",}
+
+# CALLBACKS ####################################################################
+
+print('[init] creating the callbacks...')
+
+print('.... speed tracking')
+speed_callback = deformers.pipelines.prefix.callbacks.prepare_speed_callback(**SPEED_CFG)
+
+print('.... loss EMA tracking')
+ema_callback = deformers.pipelines.prefix.callbacks.prepare_ema_callback(**EMA_CFG)
+
+print('.... state logging')
+logging_callback = deformers.pipelines.prefix.callbacks.prepare_logging_callback(**LOGGING_CFG)
+tensorboard_callback = deformers.pipelines.prefix.callbacks.prepare_tensorboard_callback(**TBOARD_CFG)
+
+print('.... model saving')
+saving_callback = deformers.pipelines.prefix.callbacks.prepare_saving_callback(model_obj=PREFIX_MOD, **SAVING_CFG)
 
 # TESTING ######################################################################
 
@@ -421,12 +445,6 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
         # perform the backward propagation of the loss
         SCALER_OBJ.scale(__losses[-1]).backward()
 
-        # track token stats
-        __count += torch.bincount(__indices_arr.flatten().cpu(), minlength=VOCAB_LEN)
-        __state['vocab/seen'] = float((__count > 0).sum().item()) / VOCAB_LEN
-        __state['vocab/min'] = int(__count.min().item())
-        __state['vocab/max'] = int(__count.max().item())
-
         # the total loss is the average loss after N accumulation steps
         __state['loss/mse/0'] += __losses[0].item()
         __state['loss/mse/k'] += __losses[1].item()
@@ -452,31 +470,11 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
             SCHEDULER_OBJ.step()
             OPTIMIZER_OBJ.zero_grad()
 
-            # timing and throughput
-            __state['iter/time'] = time.monotonic() - __state['iter/start']
-            __state['iter/tps'] = deformers.pipelines.monitor.throughput(BATCH_LEN, __state['iter/time'])
-
-            # track the memory consumption too
-            __state = {**__state, **deformers.pipelines.monitor.gpu_memory_mb()}
-
             # format the state for logging
             __stats = format_state(state=__state)
 
             # filter the epoch and step since they are already in the pbar
             __pbar.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
-
-        # log only a fraction of the steps
-        if __state['switch/log']:
-            # write all the stats to the log file
-            LOG_FILE.write(deformers.pipelines.monitor.serialize_state(state=__stats, prefix='') + '\n')
-
-            # write all the stats to the tensorboard summary
-            deformers.pipelines.monitor.log_scalars(writer=LOG_TB, step=__step, scalars=__state)
-
-        # write to disk sporadically
-        if __state['switch/save']:
-            # save the weights and config
-            PREFIX_MOD.save_checkpoint(path=CHECKPOINT_CFG['save_path'])
 
         # reset only after the gradient accumulation
         if __state['switch/grad']:
@@ -494,22 +492,14 @@ for __epoch in range(TRAINING_CFG['epoch_num']):
 
         # check which processes should be run on this step
         __state['switch/train'] = ((__step + 1) % TESTING_CFG['step_num']) != 0
-        __state['switch/grad'] = ((__step + 1) % GRADIENT_CFG['step_num']) == 0
-        __state['switch/log'] = ((__step + 1) % LOGGING_CFG['step_num']) == 0
-        __state['switch/save'] = ((__step + 1) % CHECKPOINT_CFG['step_num']) == 0
+        __state['switch/grad'] = ((__step + 1) % GRADIENT_CFG['every_num']) == 0
+        __state['switch/log'] = ((__step + 1) % LOGGING_CFG['every_num']) == 0
+        __state['switch/save'] = ((__step + 1) % SAVING_CFG['every_num']) == 0
 
     # cleanup
     __pbar.close()
 
-# POST PROCESSING ##############################################################
-
-print('[post] closing the log streams...')
-LOG_TB.close()
-LOG_FILE.close()
-
-print(f'[post] saving prefix to {CHECKPOINT_CFG["save_path"]}...')
-PREFIX_MOD.save_checkpoint(path=CHECKPOINT_CFG['save_path'])
-
 # DATAVIZ ######################################################################
 
-# !tensorboard --logdir=logs
+# %load_ext tensorboard
+# %tensorboard --logdir=logs
