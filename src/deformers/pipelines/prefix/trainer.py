@@ -4,6 +4,7 @@ import torch
 import torch.nn.utils
 import tqdm
 
+import mlable.models
 import mlable.utils
 
 import deformers.pipelines.monitor as _monitor
@@ -91,11 +92,11 @@ class PrefixTrainer:
         # secondary operations performed at the end of the step
         self._callbacks = list(callbacks_arr) or []
         # initialize the state with the provided values and defaults
-        self._state = self.reset_state(dict(state_cfg))
+        self._state = self.init_state(dict(state_cfg))
 
     # STATE ####################################################################
 
-    def reset_state(self, override: dict={}) -> dict[str, dict]:
+    def init_state(self, override: dict={}) -> dict[str, dict]:
         """Reset the nested runtime state."""
         return {
             'tensors': override.get('tensors', {}),
@@ -108,6 +109,7 @@ class PrefixTrainer:
                     'epoch/total': int(self._config['training'].get('epoch_num', 4)),
                     'epoch/current': 1,
                     'step/total': 0,
+                    'step/global': 1,
                     'step/current': 1,
                     'iter/start': time.monotonic(),
                     'iter/time': 0.0,
@@ -125,36 +127,121 @@ class PrefixTrainer:
                     'vocab/max': 0,},
                 **override.get('scalars', {}),},}
 
-    # TRACKING #################################################################
+    # PHASE ####################################################################
 
-    def track_iteration(
+    def run_phase(
+        self,
+        epoch_tot: int,
+        dataset_obj: object,
+    ) -> None:
+        """Run a named phase for one or more epochs."""
+        for __epoch in range(epoch_tot):
+            self.run_epoch(
+                epoch_num=__epoch,
+                epoch_tot=epoch_tot,
+                dataset_obj=dataset_obj)
+
+    # EPOCH ####################################################################
+
+    def init_epoch(
         self,
         epoch_num: int,
         epoch_tot: int,
-        step_num: int,
-        step_tot: int,
-    ) -> None:
-        """Update counters and step switches."""
-        __step = int(step_num) + 1
-        # track the counters
+        dataset_obj: object,
+    ) -> object:
+        """Start a new epoch."""
+        __step_tot = len(dataset_obj)
+        # track the iteration counters
         self._state['scalars']['epoch/total'] = int(epoch_tot)
         self._state['scalars']['epoch/current'] = int(epoch_num) + 1
         self._state['scalars']['step/total'] = int(step_tot)
-        self._state['scalars']['step/current'] = int(step_num) + 1
+        # create a fresh iterator on the dataset
+        return tqdm.tqdm(
+            dataset_obj.iter(),
+            total=__step_tot,
+            desc=f'epoch {epoch_num + 1}/{epoch_tot}',
+            unit='batch',
+            leave=True)
+
+    def run_epoch(
+        self,
+        epoch_num: int,
+        epoch_tot: int,
+        dataset_obj: object,
+        column_str: str,
+    ) -> None:
+        """Run one epoch over a dataset."""
+        __pbar = self.init_epoch(
+            epoch_num=epoch_num,
+            epoch_tot=epoch_tot,
+            dataset_obj=dataset_obj)
+        # fresh iterator on the dataset
+        for __step, __batch in enumerate(__pbar):
+            # track the counters in the state
+            self.init_step(step_num=__step)
+            # vectorize => forward => loss => backward => update => callbacks => reset
+            self.run_step(batch_arr=__batch, column_str=column_str)
+            # reset the loss and free the memory
+            self.close_step()
+            # format and display the main stats
+            self.step_progress(__pbar)
+        # terminate the progress bar
+        self.close_epoch(__pbar)
+
+    def close_epoch(self, pbar_obj: object) -> None:
+        """Terminate the temporary state of the epoch."""
+        pbar_obj.close()
+
+    # STEP #####################################################################
+
+    def init_step(self, step_num: int) -> None:
+        """Update counters and step switches."""
+        __step_num = int(step_num) + 1
+        __step_tot = self._state['scalars']['step/total']
+        __epoch_num = max(0, self._state['scalars']['epoch/current'] - 1)
+        # track the counters
+        self._state['scalars']['step/global'] = __step_num + __epoch_num * __step_tot
+        self._state['scalars']['step/current'] = __step_num
         # frequency of the main operations
-        __test_every = int(self._config['testing'].get('step_num', 0))
-        __log_every = int(self._config['logging'].get('step_num', 0))
-        __save_every = int(self._config['saving'].get('step_num', 0))
-        __grad_every = int(self._config['gradient'].get('step_num', 1))
+        __test_every = int(self._config['testing'].get('every_num', 0))
+        __log_every = int(self._config['logging'].get('every_num', 0))
+        __save_every = int(self._config['saving'].get('every_num', 0))
+        __grad_every = int(self._config['gradient'].get('every_num', 1))
         # tracks the operation that (will) run on the current step
-        self._state['scalars']['switch/train'] = int((__test_every < 1) or ((__step % __test_every) != 0))
-        self._state['scalars']['switch/log'] = int((__log_every > 0) and ((__step % __log_every) == 0))
-        self._state['scalars']['switch/save'] = int((__save_every > 0) and ((__step % __save_every) == 0))
-        self._state['scalars']['switch/grad'] = int((__step % __grad_every) == 0)
+        self._state['scalars']['switch/train'] = int((__test_every < 1) or ((__step_num % __test_every) != 0))
+        self._state['scalars']['switch/log'] = int((__log_every > 0) and ((__step_num % __log_every) == 0))
+        self._state['scalars']['switch/save'] = int((__save_every > 0) and ((__step_num % __save_every) == 0))
+        self._state['scalars']['switch/grad'] = int((__step_num % __grad_every) == 0)
+
+    def run_step(
+        self,
+        batch_arr: object,
+        column_str: str,
+    ) -> None:
+        """Run one training step."""
+        self.step_batch(batch_arr=batch_arr, column_str=column_str)
+        self.step_forward()
+        self.step_losses()
+        self.step_backward()
+        self.step_optimizer()
+        self.step_callbacks()
+
+    def close_step(self) -> None:
+        """Reset the state after updating the weights."""
+        if bool(self._state['scalars']['switch/grad']):
+            # only reset after a weight update, because the mini batch losses accumulate accross steps
+            self._state['tensors'] = {}
+            self._state['scalars']['loss/total'] = 0.0
+            self._state['scalars']['loss/mse/0'] = 0.0
+            self._state['scalars']['loss/mse/k'] = 0.0
+            self._state['scalars']['loss/cos/0'] = 0.0
+            self._state['scalars']['loss/cos/k'] = 0.0
+            # garbage collection
+            mlable.models.free_memory()
 
     # VECTORIZE ################################################################
 
-    def step_batch(self, batch_arr: object) -> None:
+    def step_batch(self, batch_arr: object, column_str: str) -> None:
         """Vectorize a raw batch into mask, token ids, and byte patches."""
         __pad = self._config['batch'].get('padding_str', '')
         # common args
@@ -167,11 +254,11 @@ class PrefixTrainer:
             'patch_dim': int(self._config['batch']['patch_dim']),
             'left_pad': bool(self._config['batch'].get('left_pad', True)),}
         # check the content of the batch
-        if is_text(batch_arr):
-            __tensors = _processors.vectorize_strings(text_arr=batch_arr, **__args)
+        if 'indice' in column_str:
+            __tensors = _processors.vectorize_indices(indices_arr=batch_arr[column_str], padding_str=__pad, **__args)
         # already byte encoded
         else:
-            __tensors = _processors.vectorize_indices(indices_arr=batch_arr, padding_str=__pad, **__args)
+            __tensors = _processors.vectorize_strings(text_arr=batch_arr[column_str], **__args)
         # save the tensors
         self._state['tensors']['inputs/mask'] = __tensors[0]
         self._state['tensors']['inputs/indices'] = __tensors[1]
@@ -228,7 +315,7 @@ class PrefixTrainer:
             student_k_arr=self._state['tensors']['outputs/student/k'],
             teacher_0_arr=self._state['tensors']['outputs/teacher/0'],
             teacher_k_arr=self._state['tensors']['outputs/teacher/k'],
-            step_num=int(self._config['gradient'].get('step_num', 1)),
+            step_num=int(self._config['gradient'].get('every_num', 1)),
             mse_0_rate=float(self._config['loss'].get('mse_0_rate', 1.0)),
             mse_k_rate=float(self._config['loss'].get('mse_k_rate', 0.0)),
             cos_0_rate=float(self._config['loss'].get('cos_0_rate', 1.0)),
@@ -258,7 +345,6 @@ class PrefixTrainer:
     def step_optimizer(self) -> None:
         """Apply optimizer, scaler, scheduler, and gradient clipping on accumulation boundary."""
         __norm_max = float(self._config['gradient'].get('max_norm', 1.0))
-        __step_num = int(self._state['scalars']['step/current'])
         # only work every few steps, after accumulating the loss on a few batches
         if bool(self._state['scalars']['switch/grad']):
             # gradient clipping; unscale first to get true grad norm
@@ -291,63 +377,10 @@ class PrefixTrainer:
             if _callbacks.is_callback(__callback):
                 __callback['cleanup']()
 
-    # RESET ####################################################################
+    # PROGRESS #################################################################
 
-    def step_reset(self) -> None:
-        """Reset the state after updating the weights."""
-        if bool(self._state['scalars']['switch/grad']):
-            # only reset after a weight update, because the mini batch losses accumulate accross steps
-            self._state = self.reset_state(override={'scalars': {'loss/ema': self._state['scalars']['loss/ema']}})
-
-    # LOOP #####################################################################
-
-    def run_step(
-        self,
-        batch_arr: object,
-    ) -> None:
-        """Run one training step."""
-        self.step_batch(batch_arr=batch_arr)
-        self.step_forward()
-        self.step_losses()
-        self.step_backward()
-        self.step_optimizer()
-        self.step_callbacks()
-        self.step_reset()
-
-    def run_epoch(
-        self,
-        dataset_obj: object,
-        epoch_num: int,
-        epoch_tot: int,
-    ) -> None:
-        """Run one epoch over a dataset."""
-        __step_tot = len(dataset_obj)
-        # 
-        __pbar = tqdm.tqdm(
-            dataset_obj,
-            total=__step_tot,
-            desc=f'epoch {epoch_num + 1}/{epoch_tot}',
-            unit='batch',
-            leave=True)
-        # 
-        for __step, __batch in enumerate(__pbar):
-            # track the counters in the state
-            self.track_iteration(
-                epoch_num=epoch_num,
-                epoch_tot=epoch_tot,
-                step_num=__step,
-                step_tot=__step_tot)
-            # vectorize => forward => loss => backward => update => callbacks => reset
-            self.run_step(batch_arr=__batch)
-
-    def run_phase(
-        self,
-        epoch_tot: int,
-        dataset_obj: object,
-    ) -> None:
-        """Run a named phase for one or more epochs."""
-        for __epoch in range(epoch_tot):
-            self.run_epoch(
-                dataset_obj=dataset_obj,
-                epoch_num=__epoch,
-                epoch_tot=epoch_tot)
+    def step_progress(self, pbar_obj: object) -> None:
+        # aggregate and format
+        __stats = _callbacks.format_state(state=self._state['scalars'])
+        # filter the epoch and step since they are already in the pbar
+        pbar_obj.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
