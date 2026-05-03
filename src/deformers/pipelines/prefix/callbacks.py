@@ -38,12 +38,12 @@ def format_state(state: dict) -> dict:
 # SPEED ########################################################################
 
 def prepare_throughput_callback(
-    step_num: int,
+    every_num: int,
     batch_len: int,
 ) -> dict:
     # test whether the callback should be run
     def __trigger(state: dict) -> bool:
-        return (state['step/current'] % step_num) == 0
+        return (state['step/current'] % every_num) == 0
     # write the state to the target file
     def __operation(state: dict) -> None:
         # time in seconds
@@ -60,7 +60,7 @@ def prepare_throughput_callback(
 # LOGGING ######################################################################
 
 def prepare_logging_callback(
-    step_num: int,
+    every_num: int,
     path_str: str,
 ) -> dict:
     # create the parent directory
@@ -69,7 +69,7 @@ def prepare_logging_callback(
     __file = open(path_str, 'w')
     # test whether the callback should be run
     def __trigger(state: dict) -> bool:
-        return (state['step/current'] % step_num) == 0
+        return (state['step/current'] % every_num) == 0
     # write the state to the target file
     def __operation(state: dict) -> None:
         # aggregate and format
@@ -87,7 +87,7 @@ def prepare_logging_callback(
         'cleanup': __cleanup,}
 
 def prepare_tensorboard_callback(
-    step_num: int,
+    every_num: int,
     path_str: str,
 ) -> dict:
     # create the parent directory
@@ -96,7 +96,7 @@ def prepare_tensorboard_callback(
     __writer = torch.utils.tensorboard.SummaryWriter(log_dir=path_str)
     # test whether the callback should be run
     def __trigger(state: dict) -> bool:
-        return (state['step/current'] % step_num) == 0
+        return (state['step/current'] % every_num) == 0
     # write the state to the target file
     def __operation(state: dict) -> None:
         # filter out the tensors
@@ -116,7 +116,7 @@ def prepare_tensorboard_callback(
 # CHECKPOINT ###################################################################
 
 def prepare_checkpoint_callback(
-    step_num: int,
+    every_num: int,
     path_str: str,
     model_obj: object,
 ) -> dict:
@@ -124,7 +124,7 @@ def prepare_checkpoint_callback(
     os.makedirs(os.path.dirname(path_str), exist_ok=True)
     # test whether the callback should be run
     def __trigger(state: dict) -> bool:
-        return (state['step/current'] % step_num) == 0
+        return (state['step/current'] % every_num) == 0
     # write the state to the target file
     def __operation(state: dict) -> None:
         # save the configuration and state of the model in a single file
@@ -139,12 +139,12 @@ def prepare_checkpoint_callback(
 # PROGRESS #####################################################################
 
 def prepare_progress_callback(
-    step_num: int,
+    every_num: int,
     pbar_obj: object,
 ) -> dict:
     # test whether the callback should be run
     def __trigger(state: dict) -> bool:
-        return (state['step/current'] % step_num) == 0
+        return (state['step/current'] % every_num) == 0
     # write the state to the target file
     def __operation(state: dict) -> None:
         # aggregate and format
