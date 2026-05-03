@@ -93,8 +93,6 @@ class PrefixTrainer:
         # initialize the state with the provided values and defaults
         self._state = self.reset_state(dict(state_cfg))
 
-    # CONFIG ###################################################################
-
     # STATE ####################################################################
 
     def reset_state(self, override: dict={}) -> dict[str, dict]:
@@ -145,14 +143,14 @@ class PrefixTrainer:
         self._state['scalars']['step/current'] = int(step_num) + 1
         # frequency of the main operations
         __test_every = int(self._config['testing'].get('step_num', 0))
-        __grad_every = int(self._config['gradient'].get('step_num', 1))
         __log_every = int(self._config['logging'].get('step_num', 0))
         __save_every = int(self._config['saving'].get('step_num', 0))
+        __grad_every = int(self._config['gradient'].get('step_num', 1))
         # tracks the operation that (will) run on the current step
         self._state['scalars']['switch/train'] = int((__test_every < 1) or ((__step % __test_every) != 0))
-        self._state['scalars']['switch/grad'] = int((__step % __grad_every) == 0)
         self._state['scalars']['switch/log'] = int((__log_every > 0) and ((__step % __log_every) == 0))
         self._state['scalars']['switch/save'] = int((__save_every > 0) and ((__step % __save_every) == 0))
+        self._state['scalars']['switch/grad'] = int((__step % __grad_every) == 0)
 
     # VECTORIZE ################################################################
 
@@ -195,7 +193,7 @@ class PrefixTrainer:
                     model_obj=self._teacher)
                 # do not compute the hidden activations by default
                 self._state['tensors']['outputs/teacher/k'] = torch.zeros(
-                    tuple(self._state['tensors']['outputs/teacher/0'].shape)
+                    tuple(self._state['tensors']['outputs/teacher/0'].shape),
                     dtype=self._state['tensors']['outputs/teacher/0'].dtype,
                     device=self._state['tensors']['outputs/teacher/0'].device)
                 # compute the hidden activations only if they are used in the loss
@@ -210,7 +208,7 @@ class PrefixTrainer:
             ).to(dtype=self._state['tensors']['outputs/teacher/0'].dtype)
             # do not compute the hidden activations by default
             self._state['tensors']['outputs/student/k'] = torch.zeros(
-                tuple(self._state['tensors']['outputs/student/0'].shape)
+                tuple(self._state['tensors']['outputs/student/0'].shape),
                 dtype=self._state['tensors']['outputs/student/0'].dtype,
                 device=self._state['tensors']['outputs/student/0'].device)
             # compute the hidden activations only if they are used in the loss
@@ -260,8 +258,6 @@ class PrefixTrainer:
     def step_optimizer(self) -> None:
         """Apply optimizer, scaler, scheduler, and gradient clipping on accumulation boundary."""
         __norm_max = float(self._config['gradient'].get('max_norm', 1.0))
-        __ema_num = int(self._config['loss'].get('ema_num', 256))
-        __ema_rate = float(self._config['loss'].get('ema_rate', 0.99))
         __step_num = int(self._state['scalars']['step/current'])
         # only work every few steps, after accumulating the loss on a few batches
         if bool(self._state['scalars']['switch/grad']):
@@ -301,7 +297,7 @@ class PrefixTrainer:
         """Reset the state after updating the weights."""
         if bool(self._state['scalars']['switch/grad']):
             # only reset after a weight update, because the mini batch losses accumulate accross steps
-            self.reset_state()
+            self._state = self.reset_state(override={'scalars': {'loss/ema': self._state['scalars']['loss/ema']}})
 
     # LOOP #####################################################################
 
