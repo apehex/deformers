@@ -37,7 +37,7 @@ def format_state(state: dict) -> dict:
 
 # SPEED ########################################################################
 
-def prepare_throughput_callback(
+def prepare_speed_callback(
     every_num: int,
     batch_len: int,
 ) -> dict:
@@ -49,7 +49,9 @@ def prepare_throughput_callback(
         # time in seconds
         state['iter/time'] = time.monotonic() - state['iter/start']
         # tokens per second
-        state['iter/tps'] = deformers.pipelines.monitor.throughput(batch_len, state['iter/time'])
+        state['iter/tps'] = deformers.pipelines.monitor.throughput(every_num * batch_len, state['iter/time'])
+        # reset the timer
+        state['iter/start'] time.monotonic()
     # format as a callback
     return {
         'name': 'speed',
