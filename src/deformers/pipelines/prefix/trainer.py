@@ -90,7 +90,7 @@ class PrefixTrainer:
             'testing': dict(testing_cfg or {}),
             'saving': dict(saving_cfg or {}),}
         # secondary operations performed at the end of the step
-        self._callbacks = list(callbacks_arr or [])
+        self._callbacks = callbacks_arr or []
         # initialize the state with the provided values and defaults
         self._state = self.init_state(dict(state_cfg or {}))
 

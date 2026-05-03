@@ -257,11 +257,14 @@ class TestStepBatch:
     def test_routes_to_vectorize_strings_for_text_column(self, monkeypatch):
         __t, _ = self._trainer_with_mock_processors(monkeypatch)
         __called = []
-        import deformers.pipelines.prefix.processors as _p
-        __orig = _p.vectorize_strings
+
+        def __stub_strings(**kwargs):
+            __called.append(True)
+            return (torch.ones(2, 4), torch.zeros(2, 4), torch.zeros(2, 4, 2))
+
         monkeypatch.setattr(
             'deformers.pipelines.prefix.processors.vectorize_strings',
-            lambda **kwargs: (__called.append(True) or (torch.ones(2,4), torch.zeros(2,4), torch.zeros(2,4,2))))
+            __stub_strings)
         __batch = {'text': ['hello', 'world']}
         __t.step_batch(batch_arr=__batch, column_str='text')
         assert __called
@@ -269,9 +272,14 @@ class TestStepBatch:
     def test_routes_to_vectorize_indices_for_indice_column(self, monkeypatch):
         __t, _ = self._trainer_with_mock_processors(monkeypatch)
         __called = []
+
+        def __stub_indices(**kwargs):
+            __called.append(True)
+            return (torch.ones(2, 4), torch.zeros(2, 4), torch.zeros(2, 4, 2))
+
         monkeypatch.setattr(
             'deformers.pipelines.prefix.processors.vectorize_indices',
-            lambda **kwargs: (__called.append(True) or (torch.ones(2,4), torch.zeros(2,4), torch.zeros(2,4,2))))
+            __stub_indices)
         __batch = {'indices': [[1, 2, 3, 4], [5, 6, 7, 8]]}
         __t.step_batch(batch_arr=__batch, column_str='indices')
         assert __called
