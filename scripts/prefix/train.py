@@ -19,7 +19,7 @@ Training is split into two sequential phases orchestrated by PrefixTrainer:
               hidden states, which avoids expensive trunk forward passes.
 
   Phase 2 - Wikipedia text fine-tuning:
-    Dataset : wikimedia/wikipedia (pre-tokenized by the text tokenizer).
+    Dataset : wikimedia/wikipedia raw text.
     Purpose : adapt the prefix to natural-language token distributions and
               align deeper hidden states (depth-k) with the teacher.
               Both depth-0 and depth-k losses are active.
@@ -86,7 +86,7 @@ DATASET_CFG = {
         'split': 'train[:10%]',
         'streaming': False,},
     'random': {
-        'dataset_len': 1024 * MAIN_CFG['batch_dim'], # pre-batched rows; each row == one mini-batch
+        'dataset_len': 1024, # number of generated mini-batches
         'batch_dim': MAIN_CFG['batch_dim'],
         'sequence_dim': MAIN_CFG['sequence_dim'],
         'vocab_dim': 248320,                          # updated after tokenizer loads
@@ -98,11 +98,6 @@ BATCH_CFG = {
     'patch_dim': MAIN_CFG['patch_dim'],
     'padding_str': '',
     'left_pad': True,}
-
-PREPROC_CFG = {
-    'truncation': 'longest_first',
-    'padding': 'max_length',
-    'max_length': BATCH_CFG['sequence_dim'],}
 
 # TOKENIZER CONFIG #############################################################
 
@@ -243,7 +238,7 @@ PHASE1_CFG = {
 PHASE2_CFG = {
     'name': 'wikipedia',
     'epoch_num': 4,
-    'column_str': 'indices',
+    'column_str': 'text',
     'logging': {
         'path_str': os.path.abspath('logs/prefix_phase2.log'),},
     'tboard': {
@@ -265,14 +260,8 @@ TEXT_TOK.pad_token = TEXT_TOK.eos_token if not bool(TEXT_TOK.pad_token) else TEX
 
 # DATASETS #####################################################################
 
-def preprocess(sample: dict) -> dict:
-    return {'indices': TEXT_TOK(sample['text'], **PREPROC_CFG)['input_ids']}
-
 print('[init] downloading the main dataset...')
 DATASETS = {'wikipedia': datasets.load_dataset(**DATASET_CFG['wikipedia']).select_columns(['text']),}
-
-print('[init] preprocessing the main dataset...')
-DATASETS['wikipedia'] = DATASETS['wikipedia'].map(preprocess, batched=True, remove_columns=['text'])
 
 print('[init] building a random dataset...')
 DATASETS['random'] = deformers.datasets.random.build_uniform_dataset(**DATASET_CFG['random'])
@@ -362,8 +351,8 @@ class BatchedDataset:
     The trainer's init_epoch expects an object where len() returns the number
     of training steps (batches) and iter() yields one batch dict per step.
     A raw HuggingFace Dataset yields individual rows; this wrapper corrects
-    that for datasets where each row is a single tokenized sequence (e.g.
-    Wikipedia after preprocessing).
+    that for datasets where each row is a single text sequence (e.g.
+    Wikipedia).
 
     The random dataset rows are already pre-batched (each row == one
     mini-batch of batch_dim sequences), so it is passed to the trainer
