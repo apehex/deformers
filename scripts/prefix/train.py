@@ -86,7 +86,7 @@ DATASET_CFG = {
         'split': 'train[:10%]',
         'streaming': False,},
     'random': {
-        'dataset_len': 1024, # number of generated mini-batches
+        'dataset_len': 1024, # API key from random.build_uniform_dataset; each row is one mini-batch
         'batch_dim': MAIN_CFG['batch_dim'],
         'sequence_dim': MAIN_CFG['sequence_dim'],
         'vocab_dim': 248320,                          # updated after tokenizer loads
@@ -141,7 +141,7 @@ PREFIX_CFG = {
 # TRAINING UTILITIES CONFIG (shared across phases) #############################
 
 # 'dtype' and 'device' are the exact keys the trainer's step_batch reads.
-# Index tensors (mask, input_ids, byte patches) must be torch.long.
+# Vectorized mask/input_ids/byte patches are created with this integer dtype.
 # Mixed-precision compute is handled separately via MIXED_CTX.
 TRAINING_CFG = {
     'dtype': torch.long,
@@ -199,7 +199,7 @@ SAVING_CFG = {
     'path_str': os.path.abspath('checkpoints/prefix.pt'),}
 
 def merge_cfg(base_cfg: dict, override_cfg: dict|None=None) -> dict:
-    return {**dict(base_cfg), **dict(override_cfg or {})}
+    return {**base_cfg, **(override_cfg or {})}
 
 # PHASE 1 CONFIG: Uniform vocabulary warm-up ###################################
 #
