@@ -150,7 +150,8 @@ PREFIX_CFG = {
 # Mixed-precision compute is handled separately via MIXED_CTX.
 TRAINING_CFG = {
     'dtype': torch.long,
-    'device': MAIN_CFG['device_str'],}
+    'device': MAIN_CFG['device_str'],
+    'epoch_num': 4,}
 
 OPTIMIZER_CFG = {
     'lr': MAIN_CFG['learning_rate'],
@@ -168,6 +169,43 @@ GRADIENT_CFG = {
 TESTING_CFG = {
     'every_num': MAIN_CFG['testing_num'],}
 
+LOSS_CFG = {
+    'mse_0_rate': 1.0,
+    'mse_k_rate': 0.1,
+    'cos_0_rate': 1.0,
+    'cos_k_rate': 0.1,
+    'relative_opt': True,}
+
+SCHEDULER_CFG = {  # total_num updated after datasets are loaded
+    'start_rate': 5e-5,
+    'end_rate': 1e-3,
+    'total_num': 16384,
+    'warmup_num': 256,}
+
+EMA_CFG = {
+    'every_num': GRADIENT_CFG['every_num'],
+    'start_num': 256,
+    'smooth_rate': 0.99,}
+
+SPEED_CFG = {
+    'every_num': GRADIENT_CFG['every_num'],
+    'batch_len': BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'],}
+
+LOGGING_CFG = {
+    'every_num': MAIN_CFG['logging_num'],
+    'path_str': os.path.abspath('logs/prefix.log'),}
+
+TBOARD_CFG = {
+    'every_num': MAIN_CFG['logging_num'],
+    'path_str': os.path.abspath('logs/'),}
+
+SAVING_CFG = {
+    'every_num': MAIN_CFG['checkpoint_num'],
+    'path_str': os.path.abspath('checkpoints/prefix.pt'),}
+
+def merge_cfg(base_cfg: dict, override_cfg: dict|None=None) -> dict:
+    return {**dict(base_cfg), **dict(override_cfg or {})}
+
 # PHASE 1 CONFIG: Uniform vocabulary warm-up ###################################
 #
 # Only depth-0 (embedding) losses are active.  Setting mse_k_rate and
@@ -178,49 +216,21 @@ TESTING_CFG = {
 # The goal is a token-agnostic byte-to-embedding mapping: every vocabulary
 # token should produce a reasonable prefix embedding before we encounter
 # natural-language token frequencies in phase 2.
-
 PHASE1_CFG = {
     'name': 'uniform',
     'epoch_num': 2,
-    'column_str': 'indices',}
-
-PHASE1_TRAINING_CFG = {
-    **TRAINING_CFG,
-    'epoch_num': PHASE1_CFG['epoch_num'],}
-
-PHASE1_LOSS_CFG = {
-    'mse_0_rate': 1.0,
-    'mse_k_rate': 0.0, # skip depth-k: trunk hidden states not needed here
-    'cos_0_rate': 1.0,
-    'cos_k_rate': 0.0,
-    'relative_opt': True,}
-
-PHASE1_SCHEDULER_CFG = {  # total_num updated after datasets are loaded
-    'start_rate': 1e-4,
-    'end_rate': 5e-2,
-    'total_num': 4096,
-    'warmup_num': 128,}
-
-PHASE1_EMA_CFG = {
-    'every_num': GRADIENT_CFG['every_num'],
-    'start_num': 256,
-    'smooth_rate': 0.99,}
-
-PHASE1_SPEED_CFG = {
-    'every_num': GRADIENT_CFG['every_num'],
-    'batch_len': BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'],}
-
-PHASE1_LOGGING_CFG = {
-    'every_num': MAIN_CFG['logging_num'],
-    'path_str': os.path.abspath('logs/prefix_phase1.log'),}
-
-PHASE1_TBOARD_CFG = {
-    'every_num': MAIN_CFG['logging_num'],
-    'path_str': os.path.abspath('logs/phase1/'),}
-
-PHASE1_SAVING_CFG = {
-    'every_num': MAIN_CFG['checkpoint_num'],
-    'path_str': os.path.abspath('checkpoints/prefix.pt'),}
+    'column_str': 'indices',
+    'loss': {
+        'mse_k_rate': 0.0,
+        'cos_k_rate': 0.0,},
+    'scheduler': {
+        'start_rate': 1e-4,
+        'end_rate': 5e-2,
+        'warmup_num': 128,},
+    'logging': {
+        'path_str': os.path.abspath('logs/prefix_phase1.log'),},
+    'tboard': {
+        'path_str': os.path.abspath('logs/phase1/'),},}
 
 # PHASE 2 CONFIG: Wikipedia text fine-tuning ###################################
 #
@@ -230,49 +240,14 @@ PHASE1_SAVING_CFG = {
 # The optimizer and student model carry over from phase 1: weights and
 # optimizer momentum are preserved.  Only the LR schedule resets via a new
 # WaveLR instance bound to the same optimizer.
-
 PHASE2_CFG = {
     'name': 'wikipedia',
     'epoch_num': 4,
-    'column_str': 'indices',}
-
-PHASE2_TRAINING_CFG = {
-    **TRAINING_CFG,
-    'epoch_num': PHASE2_CFG['epoch_num'],}
-
-PHASE2_LOSS_CFG = {
-    'mse_0_rate': 1.0,
-    'mse_k_rate': 0.1,
-    'cos_0_rate': 1.0,
-    'cos_k_rate': 0.1,
-    'relative_opt': True,}
-
-PHASE2_SCHEDULER_CFG = {  # total_num updated after datasets are loaded
-    'start_rate': 5e-5,
-    'end_rate': 1e-3,
-    'total_num': 16384,
-    'warmup_num': 256,}
-
-PHASE2_EMA_CFG = {
-    'every_num': GRADIENT_CFG['every_num'],
-    'start_num': 256,
-    'smooth_rate': 0.99,}
-
-PHASE2_SPEED_CFG = {
-    'every_num': GRADIENT_CFG['every_num'],
-    'batch_len': BATCH_CFG['batch_dim'] * BATCH_CFG['sequence_dim'],}
-
-PHASE2_LOGGING_CFG = {
-    'every_num': MAIN_CFG['logging_num'],
-    'path_str': os.path.abspath('logs/prefix_phase2.log'),}
-
-PHASE2_TBOARD_CFG = {
-    'every_num': MAIN_CFG['logging_num'],
-    'path_str': os.path.abspath('logs/phase2/'),}
-
-PHASE2_SAVING_CFG = {
-    'every_num': MAIN_CFG['checkpoint_num'],
-    'path_str': os.path.abspath('checkpoints/prefix.pt'),}
+    'column_str': 'indices',
+    'logging': {
+        'path_str': os.path.abspath('logs/prefix_phase2.log'),},
+    'tboard': {
+        'path_str': os.path.abspath('logs/phase2/'),},}
 
 # TOKENIZERS ###################################################################
 
@@ -309,8 +284,16 @@ RANDOM_DIM = len(DATASETS['random'])
 WIKI_DIM = len(DATASETS['wikipedia']) // BATCH_CFG['batch_dim']
 
 print('[init] calibrating scheduler step counts...')
-PHASE1_SCHEDULER_CFG['total_num'] = max(1, (PHASE1_CFG['epoch_num'] * RANDOM_DIM) // GRADIENT_CFG['every_num'])
-PHASE2_SCHEDULER_CFG['total_num'] = max(1, (PHASE2_CFG['epoch_num'] * WIKI_DIM) // GRADIENT_CFG['every_num'])
+PHASE1_SCHEDULER_CFG = merge_cfg(
+    base_cfg=SCHEDULER_CFG,
+    override_cfg={
+        **PHASE1_CFG.get('scheduler', {}),
+        'total_num': max(1, (PHASE1_CFG['epoch_num'] * RANDOM_DIM) // GRADIENT_CFG['every_num']),})
+PHASE2_SCHEDULER_CFG = merge_cfg(
+    base_cfg=SCHEDULER_CFG,
+    override_cfg={
+        **PHASE2_CFG.get('scheduler', {}),
+        'total_num': max(1, (PHASE2_CFG['epoch_num'] * WIKI_DIM) // GRADIENT_CFG['every_num']),})
 
 # MODELS #######################################################################
 
@@ -335,9 +318,9 @@ mlable.models.freeze(SOURCE_MOD)
 
 print('[init] creating the student...')
 PREFIX_MOD = deformers.models.prefix.CompositeBytePrefix(**PREFIX_CFG).to(device=MAIN_CFG['device_str'])
-if MAIN_CFG['resume_opt'] and os.path.exists(PHASE2_SAVING_CFG['path_str']):
+if MAIN_CFG['resume_opt'] and os.path.exists(SAVING_CFG['path_str']):
     PREFIX_MOD = deformers.models.prefix.CompositeBytePrefix.load_checkpoint(
-        path=PHASE2_SAVING_CFG['path_str'],
+        path=SAVING_CFG['path_str'],
         shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
         device=MAIN_CFG['device_str'])
 
@@ -402,6 +385,14 @@ class BatchedDataset:
 # The random dataset is passed directly: each of its rows is a pre-batched
 # mini-batch so init_epoch sees len(DATASETS['random']) steps per epoch.
 
+PHASE1_TRAINING_CFG = merge_cfg(TRAINING_CFG, {'epoch_num': PHASE1_CFG['epoch_num']})
+PHASE1_LOSS_CFG = merge_cfg(LOSS_CFG, PHASE1_CFG.get('loss'))
+PHASE1_EMA_CFG = merge_cfg(EMA_CFG, PHASE1_CFG.get('ema'))
+PHASE1_SPEED_CFG = merge_cfg(SPEED_CFG, PHASE1_CFG.get('speed'))
+PHASE1_LOGGING_CFG = merge_cfg(LOGGING_CFG, PHASE1_CFG.get('logging'))
+PHASE1_TBOARD_CFG = merge_cfg(TBOARD_CFG, PHASE1_CFG.get('tboard'))
+PHASE1_SAVING_CFG = merge_cfg(SAVING_CFG, PHASE1_CFG.get('saving'))
+
 print('[phase1] creating scheduler...')
 PHASE1_SCHEDULER = mlable.schedulers.WaveLR(optimizer_obj=OPTIMIZER_OBJ, **PHASE1_SCHEDULER_CFG)
 
@@ -449,6 +440,14 @@ PHASE1_TRAINER.cleanup_callbacks()
 #
 # Wikipedia rows are single sequences so BatchedDataset wraps the dataset to
 # group rows into mini-batches of batch_dim sequences each.
+
+PHASE2_TRAINING_CFG = merge_cfg(TRAINING_CFG, {'epoch_num': PHASE2_CFG['epoch_num']})
+PHASE2_LOSS_CFG = merge_cfg(LOSS_CFG, PHASE2_CFG.get('loss'))
+PHASE2_EMA_CFG = merge_cfg(EMA_CFG, PHASE2_CFG.get('ema'))
+PHASE2_SPEED_CFG = merge_cfg(SPEED_CFG, PHASE2_CFG.get('speed'))
+PHASE2_LOGGING_CFG = merge_cfg(LOGGING_CFG, PHASE2_CFG.get('logging'))
+PHASE2_TBOARD_CFG = merge_cfg(TBOARD_CFG, PHASE2_CFG.get('tboard'))
+PHASE2_SAVING_CFG = merge_cfg(SAVING_CFG, PHASE2_CFG.get('saving'))
 
 print('[phase2] creating scheduler...')
 PHASE2_SCHEDULER = mlable.schedulers.WaveLR(optimizer_obj=OPTIMIZER_OBJ, **PHASE2_SCHEDULER_CFG)
