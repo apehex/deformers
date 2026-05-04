@@ -9,7 +9,8 @@ Assumptions:
 - Byte block size default follows docs/roadmap.md (patch_dim=32), configurable.
 - The byte tokenizer uses pad_id=128 (as implemented by ByteTokenizer).
 
-Training is split into two sequential phases orchestrated by PrefixTrainer:
+Training is split into two sequential phases orchestrated by a single PrefixTrainer
+instance that is reused across both phases:
 
   Phase 1 - Uniform vocabulary warm-up:
     Dataset : random uniform token indices covering the full vocabulary.
@@ -24,7 +25,7 @@ Training is split into two sequential phases orchestrated by PrefixTrainer:
               align deeper hidden states (depth-k) with the teacher.
               Both depth-0 and depth-k losses are active.
 
-The two trainers share the same student model, optimizer, and scaler so that
+The two phases share the same student model, optimizer, and scaler so that
 weight updates and optimizer momentum carry over from phase 1 to phase 2.
 Each phase creates its own scheduler and callbacks so that their learning-rate
 envelopes, log files, and TensorBoard runs are cleanly separated.
@@ -38,23 +39,19 @@ Monitoring (per optimizer step):
     - GPU: allocated and reserved memory
 """
 
-import contextlib
 import os
 
 import datasets
 import huggingface_hub
 import torch
-import torch.amp
 import torch.optim
 import transformers
 
 import mlable.models
-import mlable.schedulers
 
 import deformers.datasets.random
 import deformers.models.generic
 import deformers.models.prefix
-import deformers.pipelines.prefix.callbacks
 import deformers.pipelines.prefix.trainer
 import deformers.tokenizers.byte
 
@@ -142,7 +139,7 @@ PREFIX_CFG = {
 
 # 'dtype' and 'device' are the exact keys the trainer's step_batch reads.
 # Vectorized mask/input_ids/byte patches are created with this integer dtype.
-# Mixed-precision compute is handled separately via MIXED_CTX.
+# Mixed-precision compute is handled separately via setup_context().
 TRAINING_CFG = {
     'dtype': torch.long,
     'device': MAIN_CFG['device_str'],
@@ -197,9 +194,6 @@ TBOARD_CFG = {
 SAVING_CFG = {
     'every_num': MAIN_CFG['checkpoint_num'],
     'path_str': os.path.abspath('checkpoints/prefix.pt'),}
-
-def merge_cfg(base_cfg: dict, override_cfg: dict|None=None) -> dict:
-    return {**base_cfg, **(override_cfg or {})}
 
 # PHASE 1 CONFIG: Uniform vocabulary warm-up ###################################
 #
@@ -272,18 +266,6 @@ DATASETS['random'] = deformers.datasets.random.build_uniform_dataset(**DATASET_C
 RANDOM_DIM = len(DATASETS['random'])
 WIKI_DIM = len(DATASETS['wikipedia']) // BATCH_CFG['batch_dim']
 
-print('[init] calibrating scheduler step counts...')
-PHASE1_SCHEDULER_CFG = merge_cfg(
-    base_cfg=SCHEDULER_CFG,
-    override_cfg={
-        **PHASE1_CFG.get('scheduler', {}),
-        'total_num': max(1, (PHASE1_CFG['epoch_num'] * RANDOM_DIM) // GRADIENT_CFG['every_num']),})
-PHASE2_SCHEDULER_CFG = merge_cfg(
-    base_cfg=SCHEDULER_CFG,
-    override_cfg={
-        **PHASE2_CFG.get('scheduler', {}),
-        'total_num': max(1, (PHASE2_CFG['epoch_num'] * WIKI_DIM) // GRADIENT_CFG['every_num']),})
-
 # MODELS #######################################################################
 
 print('[init] creating the output directories...')
@@ -318,20 +300,6 @@ PREFIX_MOD.build(
     shape=(BATCH_CFG['batch_dim'], BATCH_CFG['sequence_dim'], BATCH_CFG['patch_dim']),
     device=MAIN_CFG['device_str'],
     dtype=torch.float32)
-
-# OPTIMIZER (shared across phases) #############################################
-
-print('[init] creating optimizer and scaler...')
-OPTIMIZER_OBJ = torch.optim.AdamW(PREFIX_MOD.parameters(), **OPTIMIZER_CFG)
-SCALER_OBJ = torch.amp.GradScaler(**SCALER_CFG)
-
-print('[init] enabling mixed precision context...')
-MIXED_CTX = (
-    torch.amp.autocast(device_type=MAIN_CFG['device_str'], dtype=MAIN_CFG['dtype_obj'])
-    if (MAIN_CFG['dtype_obj'] != torch.float32)
-    else contextlib.nullcontext())
-
-OPTIMIZER_OBJ.zero_grad()
 
 # CLEANUP ######################################################################
 
@@ -368,114 +336,100 @@ class BatchedDataset:
     def __iter__(self) -> object:
         return self._dataset.iter(batch_size=self._batch_dim)
 
-# PHASE 1: UNIFORM VOCABULARY WARM-UP ##########################################
+# TRAINER ######################################################################
 #
-# Use a fresh scheduler calibrated to the phase 1 step budget.
-# The random dataset is passed directly: each of its rows is a pre-batched
-# mini-batch so init_epoch sees len(DATASETS['random']) steps per epoch.
+# A single PrefixTrainer instance is reused across both phases.
+# setup_global() creates the long-lived utilities (optimizer, scaler, context)
+# that persist and carry optimizer momentum from phase 1 to phase 2.
+# setup_phase() reconfigures the phase-local utilities (scheduler, callbacks)
+# and merges the per-phase config overrides into the active config.
 
-PHASE1_TRAINING_CFG = merge_cfg(TRAINING_CFG, {'epoch_num': PHASE1_CFG['epoch_num']})
-PHASE1_LOSS_CFG = merge_cfg(LOSS_CFG, PHASE1_CFG.get('loss'))
-PHASE1_EMA_CFG = merge_cfg(EMA_CFG, PHASE1_CFG.get('ema'))
-PHASE1_SPEED_CFG = merge_cfg(SPEED_CFG, PHASE1_CFG.get('speed'))
-PHASE1_LOGGING_CFG = merge_cfg(LOGGING_CFG, PHASE1_CFG.get('logging'))
-PHASE1_TBOARD_CFG = merge_cfg(TBOARD_CFG, PHASE1_CFG.get('tboard'))
-PHASE1_SAVING_CFG = merge_cfg(SAVING_CFG, PHASE1_CFG.get('saving'))
+print('[init] calibrating scheduler step counts...')
+PHASE1_SCHEDULER_TOTAL = max(1, (PHASE1_CFG['epoch_num'] * RANDOM_DIM) // GRADIENT_CFG['every_num'])
+PHASE2_SCHEDULER_TOTAL = max(1, (PHASE2_CFG['epoch_num'] * WIKI_DIM) // GRADIENT_CFG['every_num'])
 
-print('[phase1] creating scheduler...')
-PHASE1_SCHEDULER = mlable.schedulers.WaveLR(optimizer_obj=OPTIMIZER_OBJ, **PHASE1_SCHEDULER_CFG)
-
-print('[phase1] creating callbacks...')
-PHASE1_CALLBACKS = [
-    deformers.pipelines.prefix.callbacks.prepare_speed_callback(**PHASE1_SPEED_CFG),
-    deformers.pipelines.prefix.callbacks.prepare_ema_callback(**PHASE1_EMA_CFG),
-    deformers.pipelines.prefix.callbacks.prepare_logging_callback(**PHASE1_LOGGING_CFG),
-    deformers.pipelines.prefix.callbacks.prepare_tensorboard_callback(**PHASE1_TBOARD_CFG),
-    deformers.pipelines.prefix.callbacks.prepare_saving_callback(model_obj=PREFIX_MOD, **PHASE1_SAVING_CFG),]
-
-print('[phase1] creating trainer...')
-PHASE1_TRAINER = deformers.pipelines.prefix.trainer.PrefixTrainer(
+print('[init] building trainer...')
+TRAINER = deformers.pipelines.prefix.trainer.PrefixTrainer(
     text_tok=TEXT_TOK,
     byte_tok=BYTE_TOK,
     teacher_mod=SOURCE_MOD,
     student_mod=PREFIX_MOD,
-    optimizer_obj=OPTIMIZER_OBJ,
-    scheduler_obj=PHASE1_SCHEDULER,
-    scaler_obj=SCALER_OBJ,
-    context_obj=MIXED_CTX,
     batch_cfg=BATCH_CFG,
-    loss_cfg=PHASE1_LOSS_CFG,
+    loss_cfg=LOSS_CFG,
     gradient_cfg=GRADIENT_CFG,
-    training_cfg=PHASE1_TRAINING_CFG,
-    logging_cfg=PHASE1_LOGGING_CFG,
-    saving_cfg=PHASE1_SAVING_CFG,
+    training_cfg=TRAINING_CFG,
+    logging_cfg=LOGGING_CFG,
+    optimizer_cfg=OPTIMIZER_CFG,
+    scheduler_cfg=SCHEDULER_CFG,
+    scaler_cfg=SCALER_CFG,
+    saving_cfg=SAVING_CFG,
     testing_cfg=TESTING_CFG,
-    callbacks_arr=PHASE1_CALLBACKS,)
+    ema_cfg=EMA_CFG,
+    speed_cfg=SPEED_CFG,
+    tboard_cfg=TBOARD_CFG,)
+
+print('[init] setting up long-lived utilities (optimizer / scaler / context)...')
+TRAINER.setup_global()
+
+# PHASE 1: UNIFORM VOCABULARY WARM-UP ##########################################
+#
+# Only depth-0 (embedding) losses are active.  Setting mse_k_rate and
+# cos_k_rate to zero means the teacher trunk is never called for depth-k
+# hidden states, which avoids expensive trunk forward passes during this
+# vocabulary coverage phase.
+#
+# The random dataset is passed directly: each of its rows is a pre-batched
+# mini-batch so init_epoch sees len(DATASETS['random']) steps per epoch.
+
+print('[phase1] configuring phase...')
+TRAINER.setup_phase(
+    dataset_obj=DATASETS['random'],
+    epoch_num=PHASE1_CFG['epoch_num'],
+    column_str=PHASE1_CFG['column_str'],
+    override_cfg={
+        'loss': PHASE1_CFG.get('loss', {}),
+        'logging': PHASE1_CFG.get('logging', {}),
+        'tboard': PHASE1_CFG.get('tboard', {}),
+        'scheduler': {
+            **PHASE1_CFG.get('scheduler', {}),
+            'total_num': PHASE1_SCHEDULER_TOTAL,},})
 
 print('[phase1] training on uniform vocabulary coverage...')
-PHASE1_TRAINER.run_phase(
-    epoch_tot=PHASE1_CFG['epoch_num'],
-    dataset_obj=DATASETS['random'],
-    column_str=PHASE1_CFG['column_str'])
+TRAINER.run_phase()
 
 print('[phase1] cleaning up...')
-PHASE1_TRAINER.cleanup_callbacks()
+TRAINER.cleanup_callbacks()
 
 # PHASE 2: WIKIPEDIA TEXT FINE-TUNING ##########################################
 #
-# Create a fresh scheduler calibrated to the phase 2 step budget.  The
-# optimizer and student model carry over from phase 1 so weights and momentum
-# are preserved; only the LR schedule restarts.
+# Both depth-0 and depth-k losses are active so the student learns to align
+# its representations with the teacher at every measured depth.
+#
+# The optimizer and student model carry over from phase 1: weights and
+# optimizer momentum are preserved.  Only the LR schedule resets via a new
+# WaveLR instance bound to the same optimizer.
 #
 # Wikipedia rows are single sequences so BatchedDataset wraps the dataset to
 # group rows into mini-batches of batch_dim sequences each.
 
-PHASE2_TRAINING_CFG = merge_cfg(TRAINING_CFG, {'epoch_num': PHASE2_CFG['epoch_num']})
-PHASE2_LOSS_CFG = merge_cfg(LOSS_CFG, PHASE2_CFG.get('loss'))
-PHASE2_EMA_CFG = merge_cfg(EMA_CFG, PHASE2_CFG.get('ema'))
-PHASE2_SPEED_CFG = merge_cfg(SPEED_CFG, PHASE2_CFG.get('speed'))
-PHASE2_LOGGING_CFG = merge_cfg(LOGGING_CFG, PHASE2_CFG.get('logging'))
-PHASE2_TBOARD_CFG = merge_cfg(TBOARD_CFG, PHASE2_CFG.get('tboard'))
-PHASE2_SAVING_CFG = merge_cfg(SAVING_CFG, PHASE2_CFG.get('saving'))
-
-print('[phase2] creating scheduler...')
-PHASE2_SCHEDULER = mlable.schedulers.WaveLR(optimizer_obj=OPTIMIZER_OBJ, **PHASE2_SCHEDULER_CFG)
-
-print('[phase2] creating callbacks...')
-PHASE2_CALLBACKS = [
-    deformers.pipelines.prefix.callbacks.prepare_speed_callback(**PHASE2_SPEED_CFG),
-    deformers.pipelines.prefix.callbacks.prepare_ema_callback(**PHASE2_EMA_CFG),
-    deformers.pipelines.prefix.callbacks.prepare_logging_callback(**PHASE2_LOGGING_CFG),
-    deformers.pipelines.prefix.callbacks.prepare_tensorboard_callback(**PHASE2_TBOARD_CFG),
-    deformers.pipelines.prefix.callbacks.prepare_saving_callback(model_obj=PREFIX_MOD, **PHASE2_SAVING_CFG),]
-
-print('[phase2] creating trainer...')
-PHASE2_TRAINER = deformers.pipelines.prefix.trainer.PrefixTrainer(
-    text_tok=TEXT_TOK,
-    byte_tok=BYTE_TOK,
-    teacher_mod=SOURCE_MOD,
-    student_mod=PREFIX_MOD,
-    optimizer_obj=OPTIMIZER_OBJ,
-    scheduler_obj=PHASE2_SCHEDULER,
-    scaler_obj=SCALER_OBJ,
-    context_obj=MIXED_CTX,
-    batch_cfg=BATCH_CFG,
-    loss_cfg=PHASE2_LOSS_CFG,
-    gradient_cfg=GRADIENT_CFG,
-    training_cfg=PHASE2_TRAINING_CFG,
-    logging_cfg=PHASE2_LOGGING_CFG,
-    saving_cfg=PHASE2_SAVING_CFG,
-    testing_cfg=TESTING_CFG,
-    callbacks_arr=PHASE2_CALLBACKS,)
+print('[phase2] configuring phase...')
+TRAINER.setup_phase(
+    dataset_obj=BatchedDataset(DATASETS['wikipedia'], BATCH_CFG['batch_dim']),
+    epoch_num=PHASE2_CFG['epoch_num'],
+    column_str=PHASE2_CFG['column_str'],
+    override_cfg={
+        'loss': PHASE2_CFG.get('loss', {}),
+        'logging': PHASE2_CFG.get('logging', {}),
+        'tboard': PHASE2_CFG.get('tboard', {}),
+        'scheduler': {
+            **PHASE2_CFG.get('scheduler', {}),
+            'total_num': PHASE2_SCHEDULER_TOTAL,},})
 
 print('[phase2] training on Wikipedia...')
-PHASE2_TRAINER.run_phase(
-    epoch_tot=PHASE2_CFG['epoch_num'],
-    dataset_obj=BatchedDataset(DATASETS['wikipedia'], BATCH_CFG['batch_dim']),
-    column_str=PHASE2_CFG['column_str'])
+TRAINER.run_phase()
 
 print('[phase2] cleaning up...')
-PHASE2_TRAINER.cleanup_callbacks()
+TRAINER.cleanup_callbacks()
 
 # DATAVIZ ######################################################################
 

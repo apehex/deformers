@@ -3,7 +3,7 @@ Unit tests for deformers.pipelines.prefix.trainer.PrefixTrainer.
 
 Covers:
 - init_state: populates nested tensors/scalars keys with expected defaults.
-- init_step: updates step/current, step/global, and operation switches.
+- init_step: updates step/current, step/global (monotonic), and operation switches.
 - step_batch: routes to vectorize_strings vs vectorize_indices based on column_str.
 - step_forward: populates teacher/student tensors; skips hidden forward when not needed.
 - step_losses: stores tensor loss and accumulates detached scalar metrics.
@@ -11,7 +11,10 @@ Covers:
 - step_optimizer: only steps optimizer/scaler/scheduler when switch/grad is active.
 - close_step: resets transient tensors and scalars only on grad-update boundaries.
 - run_epoch: iterates over dataset, calls run_step and close_step, closes pbar.
-- run_phase: calls run_epoch for the correct number of epochs.
+- run_phase: calls run_epoch for the correct number of epochs (uses stored phase config).
+- setup_optimizer: creates optimizer only when missing, unless overwrite_opt=True.
+- setup_global: initializes optimizer, scaler, and context.
+- setup_phase: updates active config, stores phase dataset/column/epoch, rebuilds scheduler and callbacks.
 """
 
 import contextlib
@@ -55,12 +58,23 @@ def _make_config(
         'logging': {'every_num': log_every,},
         'saving': {'every_num': save_every,},
         'testing': {'every_num': test_every,},
+        'optimizer': {'lr': 1e-3,},
     }
 
 
 def _make_fake_param() -> torch.nn.Parameter:
     """Single trainable parameter for optimizer stubs."""
     return torch.nn.Parameter(torch.zeros(1))
+
+
+def _make_mock_scaler() -> unittest.mock.MagicMock:
+    """Minimal stub for GradScaler."""
+    __scaler = unittest.mock.MagicMock()
+    __scaler.scale = lambda x: x
+    __scaler.unscale_ = unittest.mock.MagicMock()
+    __scaler.step = unittest.mock.MagicMock()
+    __scaler.update = unittest.mock.MagicMock()
+    return __scaler
 
 
 def _make_trainer(
@@ -71,6 +85,13 @@ def _make_trainer(
     test_every: int = 0,
     callbacks_arr: list = None,
 ) -> _trainer.PrefixTrainer:
+    """Build a PrefixTrainer with test-friendly stubs.
+
+    The trainer is constructed with configs only (new API).
+    _optimizer, _scaler, and _context are then set directly so that
+    existing tests for step_*, close_step, run_epoch, and run_phase continue
+    to work without calling setup_global().
+    """
     cfg = _make_config(
         epoch_num=epoch_num,
         grad_every=grad_every,
@@ -79,36 +100,35 @@ def _make_trainer(
         test_every=test_every)
 
     __param = _make_fake_param()
-    __optimizer = torch.optim.SGD([__param], lr=1e-3)
-
-    # minimal stub for GradScaler
-    __scaler = unittest.mock.MagicMock()
-    __scaler.scale = lambda x: x
-    __scaler.unscale_ = unittest.mock.MagicMock()
-    __scaler.step = unittest.mock.MagicMock()
-    __scaler.update = unittest.mock.MagicMock()
-
-    # student model that returns a tensor of the right shape
     __student = unittest.mock.MagicMock()
+    # student.parameters() must return something iterable for clip_grad_norm_
+    __student.parameters = lambda: [__param]
 
-    return _trainer.PrefixTrainer(
+    __t = _trainer.PrefixTrainer(
         text_tok=unittest.mock.MagicMock(),
         byte_tok=unittest.mock.MagicMock(),
         teacher_mod=unittest.mock.MagicMock(),
         student_mod=__student,
-        optimizer_obj=__optimizer,
-        scheduler_obj=None,
-        scaler_obj=__scaler,
-        context_obj=contextlib.nullcontext(),
-        callbacks_arr=callbacks_arr or [],
         batch_cfg=cfg['batch'],
         loss_cfg=cfg['loss'],
         gradient_cfg=cfg['gradient'],
         training_cfg=cfg['training'],
         logging_cfg=cfg['logging'],
+        optimizer_cfg=cfg['optimizer'],
         saving_cfg=cfg['saving'],
         testing_cfg=cfg['testing'],
     )
+
+    # inject test-friendly utilities directly (bypass setup_global for existing tests)
+    __t._optimizer = torch.optim.SGD([__param], lr=1e-3)
+    __t._scaler = _make_mock_scaler()
+    __t._context = contextlib.nullcontext()
+
+    if callbacks_arr is not None:
+        import deformers.pipelines.prefix.callbacks as _cb
+        __t._callbacks = [__c for __c in callbacks_arr if _cb.is_callback(__c)]
+
+    return __t
 
 
 # INIT_STATE ###################################################################
@@ -141,10 +161,10 @@ class TestInitState:
         __state = __t.init_state()
         assert __state['scalars']['epoch/total'] == 7
 
-    def test_scalars_has_step_global_one(self):
+    def test_scalars_step_global_starts_at_zero(self):
         __t = _make_trainer()
         __state = __t.init_state()
-        assert __state['scalars']['step/global'] == 1
+        assert __state['scalars']['step/global'] == 0
 
     def test_scalars_has_loss_keys(self):
         __t = _make_trainer()
@@ -183,19 +203,28 @@ class TestInitStep:
         __t.init_step(step_num=4)
         assert __t._state['scalars']['step/current'] == 5
 
-    def test_step_global_first_epoch(self):
-        # epoch/current == 1 (epoch index 0)
+    def test_step_global_increments_from_zero(self):
+        """step/global starts at 0 and increases by 1 per init_step call."""
         __t = self._trainer_with_steps(step_tot=10)
-        __t._state['scalars']['epoch/current'] = 1
-        __t.init_step(step_num=2)
-        # global = (2+1) + 0 * 10 = 3
-        assert __t._state['scalars']['step/global'] == 3
+        assert __t._state['scalars']['step/global'] == 0
+        __t.init_step(step_num=0)
+        assert __t._state['scalars']['step/global'] == 1
 
-    def test_step_global_second_epoch(self):
+    def test_step_global_monotonically_increases(self):
+        """step/global increases by 1 on every call, regardless of epoch."""
         __t = self._trainer_with_steps(step_tot=10)
+        for __i in range(5):
+            __t.init_step(step_num=__i)
+        assert __t._state['scalars']['step/global'] == 5
+
+    def test_step_global_persists_across_epoch_resets(self):
+        """step/global does not reset when epoch/current changes."""
+        __t = self._trainer_with_steps(step_tot=10)
+        for __i in range(10):
+            __t.init_step(step_num=__i)
+        # simulate epoch rollover
         __t._state['scalars']['epoch/current'] = 2
         __t.init_step(step_num=0)
-        # global = 1 + 1 * 10 = 11
         assert __t._state['scalars']['step/global'] == 11
 
     def test_switch_grad_true_at_multiple(self):
@@ -312,7 +341,7 @@ class TestStepForward:
             'mse_k_rate': 1.0 if hidden else 0.0,
             'cos_k_rate': 0.0,}
         __t = _make_trainer()
-        __t._config['loss'].update(__cfg_loss)
+        __t._active_cfg['loss'].update(__cfg_loss)
 
         # pre-fill input tensors
         __B, __T, __H = 2, 4, 8
@@ -584,10 +613,32 @@ class TestRunEpoch:
 
 # RUN_PHASE ####################################################################
 
+class _FakeDataset:
+    """Minimal dataset stub that is iterable and has a len."""
+
+    def __init__(self, batches):
+        self._batches = list(batches)
+
+    def __len__(self):
+        return len(self._batches)
+
+    def __iter__(self):
+        return iter(self._batches)
+
+
 class TestRunPhase:
 
+    def _setup_phase(self, trainer: _trainer.PrefixTrainer, ds, epoch_num: int, column_str: str) -> None:
+        """Set phase attributes directly without calling setup_phase() to avoid scheduler setup."""
+        trainer._dataset_obj = ds
+        trainer._column_str = column_str
+        trainer._epoch_num = epoch_num
+        trainer._state['scalars']['epoch/total'] = epoch_num
+        # bypass validate_setup which requires optimizer/scaler/context to be set via setup_global
+        trainer.validate_setup = lambda: None
+
     def test_calls_run_epoch_for_each_epoch(self):
-        __t = _make_trainer(epoch_num=3)
+        __t = _make_trainer()
         __epoch_calls = []
 
         def __fake_run_epoch(epoch_num, epoch_tot, dataset_obj, column_str):
@@ -595,7 +646,8 @@ class TestRunPhase:
 
         __t.run_epoch = __fake_run_epoch
         __ds = _FakeDataset([{'text': ['x']}])
-        __t.run_phase(epoch_tot=3, dataset_obj=__ds, column_str='text')
+        self._setup_phase(__t, __ds, epoch_num=3, column_str='text')
+        __t.run_phase()
         assert __epoch_calls == [0, 1, 2]
 
     def test_passes_column_str_to_run_epoch(self):
@@ -607,7 +659,8 @@ class TestRunPhase:
 
         __t.run_epoch = __fake_run_epoch
         __ds = _FakeDataset([{'text': ['x']}])
-        __t.run_phase(epoch_tot=2, dataset_obj=__ds, column_str='my_column')
+        self._setup_phase(__t, __ds, epoch_num=2, column_str='my_column')
+        __t.run_phase()
         assert all(__c == 'my_column' for __c in __col_seen)
 
     def test_passes_correct_epoch_tot(self):
@@ -619,5 +672,229 @@ class TestRunPhase:
 
         __t.run_epoch = __fake_run_epoch
         __ds = _FakeDataset([])
-        __t.run_phase(epoch_tot=4, dataset_obj=__ds, column_str='text')
+        self._setup_phase(__t, __ds, epoch_num=4, column_str='text')
+        __t.run_phase()
         assert all(__e == 4 for __e in __epoch_tots)
+
+# SETUP_OPTIMIZER ##############################################################
+
+class TestSetupOptimizer:
+
+    def _make_base_trainer(self) -> _trainer.PrefixTrainer:
+        """Trainer with a real student parameter; no utilities pre-set."""
+        __param = _make_fake_param()
+        __student = torch.nn.Linear(1, 1, bias=False)
+        __t = _trainer.PrefixTrainer(
+            text_tok=unittest.mock.MagicMock(),
+            byte_tok=unittest.mock.MagicMock(),
+            teacher_mod=unittest.mock.MagicMock(),
+            student_mod=__student,
+            batch_cfg={'sequence_dim': 4, 'patch_dim': 2, 'left_pad': True},
+            loss_cfg={},
+            gradient_cfg={'every_num': 1},
+            training_cfg={'epoch_num': 1, 'dtype': torch.float32, 'device': 'cpu'},
+            logging_cfg={},
+            optimizer_cfg={'lr': 1e-3},
+        )
+        return __t
+
+    def test_creates_optimizer_when_none(self):
+        __t = self._make_base_trainer()
+        assert __t._optimizer is None
+        __t.setup_optimizer()
+        assert __t._optimizer is not None
+
+    def test_skips_when_already_exists(self):
+        __t = self._make_base_trainer()
+        __t.setup_optimizer()
+        __first = __t._optimizer
+        __t.setup_optimizer()
+        assert __t._optimizer is __first
+
+    def test_overwrites_when_flag_set(self):
+        __t = self._make_base_trainer()
+        __t.setup_optimizer()
+        __first = __t._optimizer
+        __t.setup_optimizer(overwrite_opt=True)
+        assert __t._optimizer is not __first
+
+    def test_uses_custom_cfg_override(self):
+        __t = self._make_base_trainer()
+        __t.setup_optimizer(optimizer_cfg={'lr': 9e-9})
+        __lr = __t._optimizer.param_groups[0]['lr']
+        assert abs(__lr - 9e-9) < 1e-15
+
+
+# SETUP_GLOBAL #################################################################
+
+class TestSetupGlobal:
+
+    def _make_base_trainer(self) -> _trainer.PrefixTrainer:
+        __student = torch.nn.Linear(1, 1, bias=False)
+        __t = _trainer.PrefixTrainer(
+            text_tok=unittest.mock.MagicMock(),
+            byte_tok=unittest.mock.MagicMock(),
+            teacher_mod=unittest.mock.MagicMock(),
+            student_mod=__student,
+            batch_cfg={'sequence_dim': 4, 'patch_dim': 2, 'left_pad': True},
+            loss_cfg={},
+            gradient_cfg={'every_num': 1},
+            training_cfg={'epoch_num': 1, 'dtype': torch.float32, 'device': 'cpu'},
+            logging_cfg={},
+            optimizer_cfg={'lr': 1e-3},
+            scaler_cfg={'enabled': False},
+        )
+        return __t
+
+    def test_creates_optimizer(self):
+        __t = self._make_base_trainer()
+        __t.setup_global()
+        assert __t._optimizer is not None
+
+    def test_creates_scaler(self):
+        __t = self._make_base_trainer()
+        __t.setup_global()
+        assert __t._scaler is not None
+
+    def test_creates_context(self):
+        __t = self._make_base_trainer()
+        __t.setup_global()
+        assert __t._context is not None
+
+    def test_preserves_optimizer_across_calls(self):
+        """Calling setup_global() twice should not recreate the optimizer."""
+        __t = self._make_base_trainer()
+        __t.setup_global()
+        __first = __t._optimizer
+        __t.setup_global()
+        assert __t._optimizer is __first
+
+    def test_overwrites_optimizer_when_flag_set(self):
+        __t = self._make_base_trainer()
+        __t.setup_global()
+        __first = __t._optimizer
+        __t.setup_global(overwrite_opt=True)
+        assert __t._optimizer is not __first
+
+
+# SETUP_PHASE ##################################################################
+
+class TestSetupPhase:
+
+    def _make_ready_trainer(self) -> _trainer.PrefixTrainer:
+        """Trainer with setup_global() already called."""
+        __student = torch.nn.Linear(1, 1, bias=False)
+        __t = _trainer.PrefixTrainer(
+            text_tok=unittest.mock.MagicMock(),
+            byte_tok=unittest.mock.MagicMock(),
+            teacher_mod=unittest.mock.MagicMock(),
+            student_mod=__student,
+            batch_cfg={'sequence_dim': 4, 'patch_dim': 2, 'left_pad': True},
+            loss_cfg={'mse_0_rate': 1.0, 'mse_k_rate': 0.0, 'cos_0_rate': 0.0, 'cos_k_rate': 0.0},
+            gradient_cfg={'every_num': 1},
+            training_cfg={'epoch_num': 2, 'dtype': torch.float32, 'device': 'cpu'},
+            logging_cfg={},
+            optimizer_cfg={'lr': 1e-3},
+            scaler_cfg={'enabled': False},
+        )
+        __t.setup_global()
+        return __t
+
+    def test_stores_dataset(self):
+        __t = self._make_ready_trainer()
+        __ds = _FakeDataset([])
+        __t.setup_phase(dataset_obj=__ds, epoch_num=3, column_str='text')
+        assert __t._dataset_obj is __ds
+
+    def test_stores_column_str(self):
+        __t = self._make_ready_trainer()
+        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='indices')
+        assert __t._column_str == 'indices'
+
+    def test_stores_epoch_num(self):
+        __t = self._make_ready_trainer()
+        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=5, column_str='text')
+        assert __t._epoch_num == 5
+
+    def test_updates_active_config_with_override(self):
+        __t = self._make_ready_trainer()
+        __t.setup_phase(
+            dataset_obj=_FakeDataset([]),
+            epoch_num=2,
+            column_str='text',
+            override_cfg={'loss': {'mse_k_rate': 0.5}})
+        assert __t._active_cfg['loss']['mse_k_rate'] == 0.5
+
+    def test_base_config_unchanged_by_override(self):
+        __t = self._make_ready_trainer()
+        __t.setup_phase(
+            dataset_obj=_FakeDataset([]),
+            epoch_num=2,
+            column_str='text',
+            override_cfg={'loss': {'mse_k_rate': 0.9}})
+        assert __t._base_cfg['loss']['mse_k_rate'] == 0.0
+
+    def test_active_config_reset_between_phases(self):
+        """Second setup_phase restores base config before applying new overrides."""
+        __t = self._make_ready_trainer()
+        __t.setup_phase(
+            dataset_obj=_FakeDataset([]),
+            epoch_num=2,
+            column_str='text',
+            override_cfg={'loss': {'mse_k_rate': 0.9}})
+        __t.setup_phase(
+            dataset_obj=_FakeDataset([]),
+            epoch_num=2,
+            column_str='text',
+            override_cfg={})
+        assert __t._active_cfg['loss']['mse_k_rate'] == 0.0
+
+    def test_creates_scheduler_when_cfg_provided(self):
+        __t = self._make_ready_trainer()
+        __t.setup_phase(
+            dataset_obj=_FakeDataset([]),
+            epoch_num=2,
+            column_str='text',
+            override_cfg={'scheduler': {'start_rate': 1e-4, 'end_rate': 1e-3, 'total_num': 10, 'warmup_num': 2}})
+        assert __t._scheduler is not None
+
+    def test_no_scheduler_when_cfg_empty(self):
+        __t = self._make_ready_trainer()
+        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
+        assert __t._scheduler is None
+
+    def test_scheduler_refreshed_across_phases(self):
+        """Scheduler created in phase 1 is replaced in phase 2."""
+        __t = self._make_ready_trainer()
+        __sched_cfg = {'scheduler': {'start_rate': 1e-4, 'end_rate': 1e-3, 'total_num': 10, 'warmup_num': 2}}
+        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text', override_cfg=__sched_cfg)
+        __first = __t._scheduler
+        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text', override_cfg=__sched_cfg)
+        assert __t._scheduler is not __first
+
+    def test_optimizer_preserved_across_phases(self):
+        """Optimizer set by setup_global is not touched by setup_phase."""
+        __t = self._make_ready_trainer()
+        __opt = __t._optimizer
+        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
+        assert __t._optimizer is __opt
+
+    def test_callbacks_refreshed_across_phases(self):
+        """Callbacks from phase 1 are replaced in phase 2 (list is different object)."""
+        __t = self._make_ready_trainer()
+        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
+        __first_callbacks = __t._callbacks
+        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
+        # both are empty lists here (no callback cfgs), but they must be different objects
+        assert __t._callbacks is not __first_callbacks
+
+    def test_validate_setup_passes_after_setup(self):
+        __t = self._make_ready_trainer()
+        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
+        # should not raise
+        __t.validate_setup()
+
+    def test_validate_setup_fails_before_phase(self):
+        __t = self._make_ready_trainer()
+        with pytest.raises(AssertionError):
+            __t.validate_setup()

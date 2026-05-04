@@ -84,7 +84,71 @@ Rationale:
 - the original embedding table is context-independent
 - preserving this property makes the prefix easier to evaluate
 
-## Training Decomposition
+## Trainer Lifecycle Design
+
+The `PrefixTrainer` follows a lifecycle-oriented API where models and tokenizers
+are external constructor arguments and training utilities are owned and set up
+by the trainer from configuration.
+
+### Constructor ownership
+
+The constructor accepts:
+- external objects: text tokenizer, byte tokenizer, teacher model, student model
+- base configuration dictionaries: batch, loss, gradient, training, logging,
+  optimizer, scheduler, scaler, saving, testing, ema, speed, tboard
+
+The constructor does not accept prebuilt optimizer, scheduler, scaler, context,
+or callback objects.
+
+### Internal lifecycle
+
+Long-lived utilities (optimizer, scaler, autocast context) are created by
+`setup_global()` from the base configs.  They persist across phases.
+
+Phase-local utilities (scheduler, callbacks) are created by `setup_phase()`.
+They are always recreated at the start of each phase to use phase-specific
+learning-rate schedules, log paths, and TensorBoard directories.
+
+Explicit setup methods:
+- `setup_state()` - (re)initialize the runtime state
+- `setup_optimizer()` - create AdamW from optimizer config
+- `setup_scaler()` - create GradScaler from scaler config
+- `setup_context()` - create autocast or nullcontext from training config
+- `setup_scheduler()` - create WaveLR from scheduler config
+- `setup_callbacks()` - create speed / ema / log / TensorBoard / save callbacks
+- `setup_global()` - call setup_optimizer, setup_scaler, setup_context
+- `setup_phase()` - merge phase override config, store dataset info, rebuild
+  scheduler and callbacks
+- `validate_setup()` - assert readiness before running
+
+### Overwrite policy
+
+Each `setup_*` method accepts `overwrite_opt: bool = False`.  When False, the
+method is a no-op if the utility already exists.  When True, it unconditionally
+recreates the utility.
+
+`setup_global()` passes `overwrite_opt` to all three utilities it creates; the
+default (False) means global setup is idempotent across phase transitions.
+
+`setup_phase()` always force-recreates scheduler and callbacks (internal calls
+use `overwrite_opt=True`), so phase transitions are always clean.
+
+### Active vs base configuration
+
+`_base_cfg` holds the constructor-time configs and is never modified after
+construction.  `_active_cfg` is rebuilt from `_base_cfg` + per-phase overrides
+at the start of every `setup_phase()` call, which guarantees that phase 2 does
+not accidentally inherit phase 1 config deltas.
+
+### Global step tracking
+
+`step/global` in the state scalars is a monotonically increasing counter that
+increments by 1 on every `init_step()` call and is never reset across epochs or
+phases.  `step/current` tracks the 1-indexed position within the current epoch.
+
+Rationale: formula-based global step (step_num + epoch_num * step_tot) resets
+when epoch_num resets at the start of a new phase; a plain counter does not.
+
 
 - frozen: trunk transformer layers and lm_head; their weights are never updated
 - trained: prefix module only (the byte-to-embedding projection)
