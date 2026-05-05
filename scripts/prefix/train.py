@@ -342,7 +342,7 @@ class BatchedDataset:
 # setup_global() creates the long-lived utilities (optimizer, scaler, context)
 # that persist and carry optimizer momentum from phase 1 to phase 2.
 # setup_phase() reconfigures the phase-local utilities (scheduler, callbacks)
-# and merges the per-phase config overrides into the active config.
+# from the config passed for the current phase.
 
 print('[init] calibrating scheduler step counts...')
 PHASE1_SCHEDULER_TOTAL = max(1, (PHASE1_CFG['epoch_num'] * RANDOM_DIM) // GRADIENT_CFG['every_num'])
@@ -353,23 +353,13 @@ TRAINER = deformers.pipelines.prefix.trainer.PrefixTrainer(
     text_tok=TEXT_TOK,
     byte_tok=BYTE_TOK,
     teacher_mod=SOURCE_MOD,
-    student_mod=PREFIX_MOD,
-    batch_cfg=BATCH_CFG,
-    loss_cfg=LOSS_CFG,
-    gradient_cfg=GRADIENT_CFG,
-    training_cfg=TRAINING_CFG,
-    logging_cfg=LOGGING_CFG,
-    optimizer_cfg=OPTIMIZER_CFG,
-    scheduler_cfg=SCHEDULER_CFG,
-    scaler_cfg=SCALER_CFG,
-    saving_cfg=SAVING_CFG,
-    testing_cfg=TESTING_CFG,
-    ema_cfg=EMA_CFG,
-    speed_cfg=SPEED_CFG,
-    tboard_cfg=TBOARD_CFG,)
+    student_mod=PREFIX_MOD,)
 
 print('[init] setting up long-lived utilities (optimizer / scaler / context)...')
-TRAINER.setup_global()
+TRAINER.setup_global(
+    training_cfg=TRAINING_CFG,
+    optimizer_cfg=OPTIMIZER_CFG,
+    scaler_cfg=SCALER_CFG,)
 
 # PHASE 1: UNIFORM VOCABULARY WARM-UP ##########################################
 #
@@ -386,13 +376,17 @@ TRAINER.setup_phase(
     dataset_obj=DATASETS['random'],
     epoch_num=PHASE1_CFG['epoch_num'],
     column_str=PHASE1_CFG['column_str'],
-    override_cfg={
-        'loss': PHASE1_CFG.get('loss', {}),
-        'logging': PHASE1_CFG.get('logging', {}),
-        'tboard': PHASE1_CFG.get('tboard', {}),
-        'scheduler': {
-            **PHASE1_CFG.get('scheduler', {}),
-            'total_num': PHASE1_SCHEDULER_TOTAL,},})
+    batch_cfg=BATCH_CFG,
+    loss_cfg={**LOSS_CFG, **PHASE1_CFG.get('loss', {})},
+    gradient_cfg=GRADIENT_CFG,
+    training_cfg=TRAINING_CFG,
+    logging_cfg={**LOGGING_CFG, **PHASE1_CFG.get('logging', {})},
+    scheduler_cfg={**SCHEDULER_CFG, **PHASE1_CFG.get('scheduler', {}), 'total_num': PHASE1_SCHEDULER_TOTAL},
+    saving_cfg=SAVING_CFG,
+    testing_cfg=TESTING_CFG,
+    ema_cfg=EMA_CFG,
+    speed_cfg=SPEED_CFG,
+    tboard_cfg={**TBOARD_CFG, **PHASE1_CFG.get('tboard', {})},)
 
 print('[phase1] training on uniform vocabulary coverage...')
 TRAINER.run_phase()
@@ -417,13 +411,17 @@ TRAINER.setup_phase(
     dataset_obj=BatchedDataset(DATASETS['wikipedia'], BATCH_CFG['batch_dim']),
     epoch_num=PHASE2_CFG['epoch_num'],
     column_str=PHASE2_CFG['column_str'],
-    override_cfg={
-        'loss': PHASE2_CFG.get('loss', {}),
-        'logging': PHASE2_CFG.get('logging', {}),
-        'tboard': PHASE2_CFG.get('tboard', {}),
-        'scheduler': {
-            **PHASE2_CFG.get('scheduler', {}),
-            'total_num': PHASE2_SCHEDULER_TOTAL,},})
+    batch_cfg=BATCH_CFG,
+    loss_cfg={**LOSS_CFG, **PHASE2_CFG.get('loss', {})},
+    gradient_cfg=GRADIENT_CFG,
+    training_cfg=TRAINING_CFG,
+    logging_cfg={**LOGGING_CFG, **PHASE2_CFG.get('logging', {})},
+    scheduler_cfg={**SCHEDULER_CFG, **PHASE2_CFG.get('scheduler', {}), 'total_num': PHASE2_SCHEDULER_TOTAL},
+    saving_cfg=SAVING_CFG,
+    testing_cfg=TESTING_CFG,
+    ema_cfg=EMA_CFG,
+    speed_cfg=SPEED_CFG,
+    tboard_cfg={**TBOARD_CFG, **PHASE2_CFG.get('tboard', {})},)
 
 print('[phase2] training on Wikipedia...')
 TRAINER.run_phase()

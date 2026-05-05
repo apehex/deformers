@@ -87,8 +87,8 @@ def _make_trainer(
 ) -> _trainer.PrefixTrainer:
     """Build a PrefixTrainer with test-friendly stubs.
 
-    The trainer is constructed with configs only (new API).
-    _optimizer, _scaler, and _context are then set directly so that
+    The trainer is constructed without configs.
+    _config, _optimizer, _scaler, and _context are then set directly so that
     existing tests for step_*, close_step, run_epoch, and run_phase continue
     to work without calling setup_global().
     """
@@ -108,16 +108,8 @@ def _make_trainer(
         text_tok=unittest.mock.MagicMock(),
         byte_tok=unittest.mock.MagicMock(),
         teacher_mod=unittest.mock.MagicMock(),
-        student_mod=__student,
-        batch_cfg=cfg['batch'],
-        loss_cfg=cfg['loss'],
-        gradient_cfg=cfg['gradient'],
-        training_cfg=cfg['training'],
-        logging_cfg=cfg['logging'],
-        optimizer_cfg=cfg['optimizer'],
-        saving_cfg=cfg['saving'],
-        testing_cfg=cfg['testing'],
-    )
+        student_mod=__student,)
+    __t._config = {__k: dict(__v) for (__k, __v) in cfg.items()}
 
     # inject test-friendly utilities directly (bypass setup_global for existing tests)
     __t._optimizer = torch.optim.SGD([__param], lr=1e-3)
@@ -341,7 +333,7 @@ class TestStepForward:
             'mse_k_rate': 1.0 if hidden else 0.0,
             'cos_k_rate': 0.0,}
         __t = _make_trainer()
-        __t._active_cfg['loss'].update(__cfg_loss)
+        __t._config['loss'].update(__cfg_loss)
 
         # pre-fill input tensors
         __B, __T, __H = 2, 4, 8
@@ -682,38 +674,30 @@ class TestSetupOptimizer:
 
     def _make_base_trainer(self) -> _trainer.PrefixTrainer:
         """Trainer with a real student parameter; no utilities pre-set."""
-        __param = _make_fake_param()
         __student = torch.nn.Linear(1, 1, bias=False)
         __t = _trainer.PrefixTrainer(
             text_tok=unittest.mock.MagicMock(),
             byte_tok=unittest.mock.MagicMock(),
             teacher_mod=unittest.mock.MagicMock(),
-            student_mod=__student,
-            batch_cfg={'sequence_dim': 4, 'patch_dim': 2, 'left_pad': True},
-            loss_cfg={},
-            gradient_cfg={'every_num': 1},
-            training_cfg={'epoch_num': 1, 'dtype': torch.float32, 'device': 'cpu'},
-            logging_cfg={},
-            optimizer_cfg={'lr': 1e-3},
-        )
+            student_mod=__student,)
         return __t
 
     def test_creates_optimizer_when_none(self):
         __t = self._make_base_trainer()
         assert __t._optimizer is None
-        __t.setup_optimizer()
+        __t.setup_optimizer(optimizer_cfg={'lr': 1e-3})
         assert __t._optimizer is not None
 
     def test_skips_when_already_exists(self):
         __t = self._make_base_trainer()
-        __t.setup_optimizer()
+        __t.setup_optimizer(optimizer_cfg={'lr': 1e-3})
         __first = __t._optimizer
         __t.setup_optimizer()
         assert __t._optimizer is __first
 
     def test_overwrites_when_flag_set(self):
         __t = self._make_base_trainer()
-        __t.setup_optimizer()
+        __t.setup_optimizer(optimizer_cfg={'lr': 1e-3})
         __first = __t._optimizer
         __t.setup_optimizer(overwrite_opt=True)
         assert __t._optimizer is not __first
@@ -729,57 +713,83 @@ class TestSetupOptimizer:
 
 class TestSetupGlobal:
 
+    def _setup_global(self, trainer: _trainer.PrefixTrainer, overwrite_opt: bool = False) -> None:
+        trainer.setup_global(
+            training_cfg={'epoch_num': 1, 'dtype': torch.float32, 'device': 'cpu'},
+            optimizer_cfg={'lr': 1e-3},
+            scaler_cfg={'enabled': False},
+            overwrite_opt=overwrite_opt)
+
     def _make_base_trainer(self) -> _trainer.PrefixTrainer:
         __student = torch.nn.Linear(1, 1, bias=False)
         __t = _trainer.PrefixTrainer(
             text_tok=unittest.mock.MagicMock(),
             byte_tok=unittest.mock.MagicMock(),
             teacher_mod=unittest.mock.MagicMock(),
-            student_mod=__student,
-            batch_cfg={'sequence_dim': 4, 'patch_dim': 2, 'left_pad': True},
-            loss_cfg={},
-            gradient_cfg={'every_num': 1},
-            training_cfg={'epoch_num': 1, 'dtype': torch.float32, 'device': 'cpu'},
-            logging_cfg={},
-            optimizer_cfg={'lr': 1e-3},
-            scaler_cfg={'enabled': False},
-        )
+            student_mod=__student,)
         return __t
 
     def test_creates_optimizer(self):
         __t = self._make_base_trainer()
-        __t.setup_global()
+        self._setup_global(__t)
         assert __t._optimizer is not None
 
     def test_creates_scaler(self):
         __t = self._make_base_trainer()
-        __t.setup_global()
+        self._setup_global(__t)
         assert __t._scaler is not None
 
     def test_creates_context(self):
         __t = self._make_base_trainer()
-        __t.setup_global()
+        self._setup_global(__t)
         assert __t._context is not None
 
     def test_preserves_optimizer_across_calls(self):
         """Calling setup_global() twice should not recreate the optimizer."""
         __t = self._make_base_trainer()
-        __t.setup_global()
+        self._setup_global(__t)
         __first = __t._optimizer
-        __t.setup_global()
+        self._setup_global(__t)
         assert __t._optimizer is __first
 
     def test_overwrites_optimizer_when_flag_set(self):
         __t = self._make_base_trainer()
-        __t.setup_global()
+        self._setup_global(__t)
         __first = __t._optimizer
-        __t.setup_global(overwrite_opt=True)
+        self._setup_global(__t, overwrite_opt=True)
         assert __t._optimizer is not __first
 
 
 # SETUP_PHASE ##################################################################
 
 class TestSetupPhase:
+
+    def _setup_phase(
+        self,
+        trainer: _trainer.PrefixTrainer,
+        dataset_obj: object,
+        epoch_num: int,
+        column_str: str,
+        **kwargs,
+    ) -> None:
+        __base_kwargs = {
+            'batch_cfg': {'sequence_dim': 4, 'patch_dim': 2, 'left_pad': True},
+            'loss_cfg': {'mse_0_rate': 1.0, 'mse_k_rate': 0.0, 'cos_0_rate': 0.0, 'cos_k_rate': 0.0},
+            'gradient_cfg': {'every_num': 1},
+            'training_cfg': {'epoch_num': 2, 'dtype': torch.float32, 'device': 'cpu'},
+            'logging_cfg': {},
+            'scheduler_cfg': {},
+            'saving_cfg': {},
+            'testing_cfg': {},
+            'ema_cfg': {},
+            'speed_cfg': {},
+            'tboard_cfg': {},}
+        __base_kwargs.update(kwargs)
+        trainer.setup_phase(
+            dataset_obj=dataset_obj,
+            epoch_num=epoch_num,
+            column_str=column_str,
+            **__base_kwargs)
 
     def _make_ready_trainer(self) -> _trainer.PrefixTrainer:
         """Trainer with setup_global() already called."""
@@ -788,109 +798,100 @@ class TestSetupPhase:
             text_tok=unittest.mock.MagicMock(),
             byte_tok=unittest.mock.MagicMock(),
             teacher_mod=unittest.mock.MagicMock(),
-            student_mod=__student,
-            batch_cfg={'sequence_dim': 4, 'patch_dim': 2, 'left_pad': True},
-            loss_cfg={'mse_0_rate': 1.0, 'mse_k_rate': 0.0, 'cos_0_rate': 0.0, 'cos_k_rate': 0.0},
-            gradient_cfg={'every_num': 1},
+            student_mod=__student,)
+        __t.setup_global(
             training_cfg={'epoch_num': 2, 'dtype': torch.float32, 'device': 'cpu'},
-            logging_cfg={},
             optimizer_cfg={'lr': 1e-3},
-            scaler_cfg={'enabled': False},
-        )
-        __t.setup_global()
+            scaler_cfg={'enabled': False},)
         return __t
 
     def test_stores_dataset(self):
         __t = self._make_ready_trainer()
         __ds = _FakeDataset([])
-        __t.setup_phase(dataset_obj=__ds, epoch_num=3, column_str='text')
+        self._setup_phase(__t, dataset_obj=__ds, epoch_num=3, column_str='text')
         assert __t._dataset_obj is __ds
 
     def test_stores_column_str(self):
         __t = self._make_ready_trainer()
-        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='indices')
+        self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=2, column_str='indices')
         assert __t._column_str == 'indices'
 
     def test_stores_epoch_num(self):
         __t = self._make_ready_trainer()
-        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=5, column_str='text')
+        self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=5, column_str='text')
         assert __t._epoch_num == 5
 
-    def test_updates_active_config_with_override(self):
+    def test_updates_current_config_with_phase_config(self):
         __t = self._make_ready_trainer()
-        __t.setup_phase(
+        self._setup_phase(
+            __t,
             dataset_obj=_FakeDataset([]),
             epoch_num=2,
             column_str='text',
-            override_cfg={'loss': {'mse_k_rate': 0.5}})
-        assert __t._active_cfg['loss']['mse_k_rate'] == 0.5
+            loss_cfg={'mse_0_rate': 1.0, 'mse_k_rate': 0.5, 'cos_0_rate': 0.0, 'cos_k_rate': 0.0})
+        assert __t._config['loss']['mse_k_rate'] == 0.5
 
-    def test_base_config_unchanged_by_override(self):
+    def test_uses_single_config_container(self):
         __t = self._make_ready_trainer()
-        __t.setup_phase(
-            dataset_obj=_FakeDataset([]),
-            epoch_num=2,
-            column_str='text',
-            override_cfg={'loss': {'mse_k_rate': 0.9}})
-        assert __t._base_cfg['loss']['mse_k_rate'] == 0.0
+        assert hasattr(__t, '_config')
+        assert not hasattr(__t, '_base_cfg')
+        assert not hasattr(__t, '_active_cfg')
 
-    def test_active_config_reset_between_phases(self):
-        """Second setup_phase restores base config before applying new overrides."""
+    def test_current_config_replaced_between_phases(self):
+        """Second setup_phase replaces the current phase config."""
         __t = self._make_ready_trainer()
-        __t.setup_phase(
+        self._setup_phase(
+            __t,
             dataset_obj=_FakeDataset([]),
             epoch_num=2,
             column_str='text',
-            override_cfg={'loss': {'mse_k_rate': 0.9}})
-        __t.setup_phase(
-            dataset_obj=_FakeDataset([]),
-            epoch_num=2,
-            column_str='text',
-            override_cfg={})
-        assert __t._active_cfg['loss']['mse_k_rate'] == 0.0
+            loss_cfg={'mse_0_rate': 1.0, 'mse_k_rate': 0.9, 'cos_0_rate': 0.0, 'cos_k_rate': 0.0})
+        self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
+        assert __t._config['loss']['mse_k_rate'] == 0.0
 
     def test_creates_scheduler_when_cfg_provided(self):
         __t = self._make_ready_trainer()
-        __t.setup_phase(
+        self._setup_phase(
+            __t,
             dataset_obj=_FakeDataset([]),
             epoch_num=2,
             column_str='text',
-            override_cfg={'scheduler': {'start_rate': 1e-4, 'end_rate': 1e-3, 'total_num': 10, 'warmup_num': 2}})
+            scheduler_cfg={'start_rate': 1e-4, 'end_rate': 1e-3, 'total_num': 10, 'warmup_num': 2})
         assert __t._scheduler is not None
 
     def test_no_scheduler_when_cfg_empty(self):
         __t = self._make_ready_trainer()
-        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
+        self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
         assert __t._scheduler is None
 
     def test_scheduler_refreshed_across_phases(self):
         """Scheduler created in phase 1 is replaced in phase 2."""
         __t = self._make_ready_trainer()
-        __sched_cfg = {'scheduler': {'start_rate': 1e-4, 'end_rate': 1e-3, 'total_num': 10, 'warmup_num': 2}}
-        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text', override_cfg=__sched_cfg)
+        __sched_cfg = {'start_rate': 1e-4, 'end_rate': 1e-3, 'total_num': 10, 'warmup_num': 2}
+        self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text', scheduler_cfg=__sched_cfg)
         __first = __t._scheduler
-        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text', override_cfg=__sched_cfg)
+        self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text', scheduler_cfg=__sched_cfg)
         assert __t._scheduler is not __first
 
     def test_optimizer_preserved_across_phases(self):
         """Optimizer set by setup_global is not touched by setup_phase."""
         __t = self._make_ready_trainer()
         __opt = __t._optimizer
-        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
+        self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
         assert __t._optimizer is __opt
 
     def test_callbacks_refreshed_across_phases(self):
         """Callbacks from phase 1 are replaced in phase 2 (list is different object)."""
         __t = self._make_ready_trainer()
-        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
+        self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
         __first_callbacks = __t._callbacks
-        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
+        self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
         # both are empty lists here (no callback cfgs), but they must be different objects
         assert __t._callbacks is not __first_callbacks
 
     def test_validate_setup_passes_after_setup(self):
         __t = self._make_ready_trainer()
-        __t.setup_phase(dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
+        self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
         # should not raise
         __t.validate_setup()
 
