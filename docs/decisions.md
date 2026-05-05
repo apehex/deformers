@@ -117,7 +117,7 @@ Explicit setup methods:
 - `setup_scheduler()` - create WaveLR from scheduler config
 - `setup_callbacks()` - create speed / ema / log / TensorBoard / save callbacks
 - `setup_global()` - call setup_optimizer, setup_scaler, setup_context
-- `setup_phase()` - merge phase override config, store dataset info, rebuild
+- `setup_phase()` - store phase config, store dataset info, rebuild
   scheduler and callbacks
 - `validate_setup()` - assert readiness before running
 
@@ -133,12 +133,12 @@ default (False) means global setup is idempotent across phase transitions.
 `setup_phase()` always force-recreates scheduler and callbacks (internal calls
 use `overwrite_opt=True`), so phase transitions are always clean.
 
-### Active vs base configuration
+### Current configuration
 
-`_base_cfg` holds the constructor-time configs and is never modified after
-construction.  `_active_cfg` is rebuilt from `_base_cfg` + per-phase overrides
-at the start of every `setup_phase()` call, which guarantees that phase 2 does
-not accidentally inherit phase 1 config deltas.
+`_config` holds the trainer's current configuration. `setup_global()` stores the
+long-lived optimizer / scaler / context config, and each `setup_phase()` call
+replaces the phase-local config dictionaries before rebuilding the scheduler and
+callbacks, which prevents phase 2 from accidentally inheriting phase 1 deltas.
 
 ### Global step tracking
 

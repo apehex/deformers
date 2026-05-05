@@ -109,7 +109,7 @@ class PrefixTrainer:
     # STATE ####################################################################
 
     def init_state(self, override: dict | None = None) -> dict[str, dict]:
-        """Build the nested runtime state, optionally merging override values."""
+        """Build the nested runtime state, optionally overriding `tensors` and `scalars`."""
         override = dict(override or {})
         return {
             'tensors': override.get('tensors', {}),
