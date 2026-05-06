@@ -123,15 +123,17 @@ Explicit setup methods:
 
 ### Overwrite policy
 
-Each `setup_*` method accepts `overwrite_opt: bool = False`.  When False, the
-method is a no-op if the utility already exists.  When True, it unconditionally
-recreates the utility.
+The utility-specific setup methods (`setup_optimizer()`, `setup_scaler()`,
+`setup_context()`, `setup_scheduler()`, and `setup_callbacks()`) recreate their
+targets when they are called, but only when the passed config has the minimum
+required keys.
 
-`setup_global()` passes `overwrite_opt` to all three utilities it creates; the
-default (False) means global setup is idempotent across phase transitions.
+`setup_global()` owns the overwrite decision for optimizer, scaler, and
+context. Its `overwrite_opt` flag keeps global setup idempotent by default
+while still allowing explicit recreation.
 
-`setup_phase()` always force-recreates scheduler and callbacks (internal calls
-use `overwrite_opt=True`), so phase transitions are always clean.
+`setup_phase()` always refreshes scheduler and callbacks by clearing the current
+phase-local utilities before rebuilding them from the current phase config.
 
 ### Current configuration
 
