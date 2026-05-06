@@ -731,9 +731,11 @@ class TestSetupCallbacks:
 
     def test_builds_callbacks_from_valid_configs(self):
         __t = self._make_base_trainer()
-        __t.setup_callbacks(speed_cfg={'every_num': 1, 'batch_len': 1})
+        __t.setup_callbacks(speed_cfg={'every_num': 2, 'batch_len': 3})
         assert len(__t._callbacks) == 1
         assert __t._callbacks[0]['name'] == 'speed'
+        assert not __t._callbacks[0]['trigger']({'step/current': 1})
+        assert __t._callbacks[0]['trigger']({'step/current': 2})
 
 
 # SETUP_GLOBAL #################################################################
