@@ -142,37 +142,33 @@ class PrefixTrainer:
 
     # SETUP ####################################################################
 
-    def setup_state(self, override_cfg: dict | None = None, overwrite_opt: bool = False) -> None:
-        """(Re)initialize the runtime state."""
-        if overwrite_opt or not self._state.get('scalars'):
-            self._state = self.init_state(override_cfg)
+    def _valid_config(self, config_obj: object, required_arr: tuple[str, ...]=()) -> bool:
+        return isinstance(config_obj, dict) and all(__key in config_obj for __key in required_arr)
 
-    def setup_optimizer(self, optimizer_cfg: dict | None = None, overwrite_opt: bool = False) -> None:
-        """Create the AdamW optimizer from config; skip if one already exists."""
-        if optimizer_cfg is not None:
-            self._config['optimizer'] = dict(optimizer_cfg)
-        if self._optimizer is not None and not overwrite_opt:
+    def setup_state(self, override_cfg: dict={}) -> None:
+        """Reinitialize the runtime state."""
+        self._state = self.init_state(override_cfg)
+
+    def setup_optimizer(self, optimizer_cfg: dict={}) -> None:
+        """Create the AdamW optimizer from config."""
+        if not self._valid_config(optimizer_cfg, ('lr',)):
             return
-        __cfg = dict(self._config['optimizer'])
+        __cfg = dict(optimizer_cfg)
         self._optimizer = torch.optim.AdamW(self._student.parameters(), **__cfg)
         self._optimizer.zero_grad()
 
-    def setup_scaler(self, scaler_cfg: dict | None = None, overwrite_opt: bool = False) -> None:
-        """Create the GradScaler from config; skip if one already exists."""
-        if scaler_cfg is not None:
-            self._config['scaler'] = dict(scaler_cfg)
-        if self._scaler is not None and not overwrite_opt:
+    def setup_scaler(self, scaler_cfg: dict={}) -> None:
+        """Create the GradScaler from config."""
+        if not self._valid_config(scaler_cfg, ('enabled',)):
             return
-        __cfg = dict(self._config['scaler'])
+        __cfg = dict(scaler_cfg)
         self._scaler = torch.amp.GradScaler(**__cfg)
 
-    def setup_context(self, training_cfg: dict | None = None, overwrite_opt: bool = False) -> None:
-        """Create the autocast context from training config; skip if one already exists."""
-        if training_cfg is not None:
-            self._config['training'] = dict(training_cfg)
-        if self._context is not None and not overwrite_opt:
+    def setup_context(self, training_cfg: dict={}) -> None:
+        """Create the autocast context from training config."""
+        if not self._valid_config(training_cfg, ('device', 'dtype')):
             return
-        __cfg = dict(self._config['training'])
+        __cfg = dict(training_cfg)
         __device = __cfg.get('device', 'cpu')
         __dtype = __cfg.get('dtype', torch.float32)
         if __dtype != torch.float32:
@@ -180,73 +176,81 @@ class PrefixTrainer:
         else:
             self._context = contextlib.nullcontext()
 
-    def setup_scheduler(self, scheduler_cfg: dict | None = None, overwrite_opt: bool = False) -> None:
-        """Create a WaveLR scheduler from config; skip if one already exists."""
-        if scheduler_cfg is not None:
-            self._config['scheduler'] = dict(scheduler_cfg)
-        if self._scheduler is not None and not overwrite_opt:
+    def setup_scheduler(self, scheduler_cfg: dict={}) -> None:
+        """Create a WaveLR scheduler from config."""
+        if not self._valid_config(scheduler_cfg, ('start_rate', 'end_rate', 'total_num', 'warmup_num')):
             return
-        __cfg = dict(self._config['scheduler'])
-        if not __cfg:
-            self._scheduler = None
-            return
+        __cfg = dict(scheduler_cfg)
         self._scheduler = mlable.schedulers.WaveLR(optimizer_obj=self._optimizer, **__cfg)
 
-    def setup_callbacks(self, overwrite_opt: bool = False) -> None:
-        """Build the phase callbacks from current config; skip if any already exist."""
-        if self._callbacks and not overwrite_opt:
-            return
-        __speed = dict(self._config['speed'])
-        __ema = dict(self._config['ema'])
-        __logging = dict(self._config['logging'])
-        __tboard = dict(self._config['tboard'])
-        __saving = dict(self._config['saving'])
+    def setup_callbacks(
+        self,
+        speed_cfg: dict={},
+        ema_cfg: dict={},
+        logging_cfg: dict={},
+        tboard_cfg: dict={},
+        saving_cfg: dict={},
+    ) -> None:
+        """Build the phase callbacks from the provided configs."""
+        __speed = dict(speed_cfg) if isinstance(speed_cfg, dict) else {}
+        __ema = dict(ema_cfg) if isinstance(ema_cfg, dict) else {}
+        __logging = dict(logging_cfg) if isinstance(logging_cfg, dict) else {}
+        __tboard = dict(tboard_cfg) if isinstance(tboard_cfg, dict) else {}
+        __saving = dict(saving_cfg) if isinstance(saving_cfg, dict) else {}
         __result = []
-        if int(__speed.get('every_num', 0)) > 0 and int(__speed.get('batch_len', 0)) > 0:
+        if self._valid_config(__speed, ('every_num', 'batch_len')) and int(__speed.get('every_num', 0)) > 0 and int(__speed.get('batch_len', 0)) > 0:
             __result.append(_callbacks.prepare_speed_callback(**__speed))
-        if int(__ema.get('every_num', 0)) > 0:
+        if self._valid_config(__ema, ('every_num', 'start_num', 'smooth_rate')) and int(__ema.get('every_num', 0)) > 0:
             __result.append(_callbacks.prepare_ema_callback(**__ema))
-        if int(__logging.get('every_num', 0)) > 0 and __logging.get('path_str'):
+        if self._valid_config(__logging, ('every_num', 'path_str')) and int(__logging.get('every_num', 0)) > 0 and __logging.get('path_str'):
             __result.append(_callbacks.prepare_logging_callback(**__logging))
-        if int(__tboard.get('every_num', 0)) > 0 and __tboard.get('path_str'):
+        if self._valid_config(__tboard, ('every_num', 'path_str')) and int(__tboard.get('every_num', 0)) > 0 and __tboard.get('path_str'):
             __result.append(_callbacks.prepare_tensorboard_callback(**__tboard))
-        if int(__saving.get('every_num', 0)) > 0 and __saving.get('path_str'):
+        if self._valid_config(__saving, ('every_num', 'path_str')) and int(__saving.get('every_num', 0)) > 0 and __saving.get('path_str'):
             __result.append(_callbacks.prepare_saving_callback(model_obj=self._student, **__saving))
         self._callbacks = __result
 
     def setup_global(
         self,
-        training_cfg: dict | None = None,
-        optimizer_cfg: dict | None = None,
-        scaler_cfg: dict | None = None,
-        overwrite_opt: bool = False,
+        training_cfg: dict={},
+        optimizer_cfg: dict={},
+        scaler_cfg: dict={},
+        overwrite_opt: bool=False,
     ) -> None:
         """Initialize long-lived utilities: optimizer, scaler, and mixed-precision context.
 
         Utilities that already exist are left unchanged unless overwrite_opt=True.
         Call once before the first phase; the optimizer persists across all phases.
         """
-        self.setup_optimizer(optimizer_cfg=optimizer_cfg, overwrite_opt=overwrite_opt)
-        self.setup_scaler(scaler_cfg=scaler_cfg, overwrite_opt=overwrite_opt)
-        self.setup_context(training_cfg=training_cfg, overwrite_opt=overwrite_opt)
+        self._config['training'] = dict(training_cfg) if isinstance(training_cfg, dict) else {}
+        self._config['optimizer'] = dict(optimizer_cfg) if isinstance(optimizer_cfg, dict) else {}
+        self._config['scaler'] = dict(scaler_cfg) if isinstance(scaler_cfg, dict) else {}
+        if overwrite_opt or self._optimizer is None:
+            self._optimizer = None
+            self.setup_optimizer(optimizer_cfg=self._config['optimizer'])
+        if overwrite_opt or self._scaler is None:
+            self._scaler = None
+            self.setup_scaler(scaler_cfg=self._config['scaler'])
+        if overwrite_opt or self._context is None:
+            self._context = None
+            self.setup_context(training_cfg=self._config['training'])
 
     def setup_phase(
         self,
         dataset_obj: object,
         epoch_num: int,
         column_str: str,
-        batch_cfg: dict | None = None,
-        loss_cfg: dict | None = None,
-        gradient_cfg: dict | None = None,
-        training_cfg: dict | None = None,
-        logging_cfg: dict | None = None,
-        scheduler_cfg: dict | None = None,
-        saving_cfg: dict | None = None,
-        testing_cfg: dict | None = None,
-        ema_cfg: dict | None = None,
-        speed_cfg: dict | None = None,
-        tboard_cfg: dict | None = None,
-        overwrite_opt: bool = False,
+        batch_cfg: dict={},
+        loss_cfg: dict={},
+        gradient_cfg: dict={},
+        training_cfg: dict={},
+        logging_cfg: dict={},
+        scheduler_cfg: dict={},
+        saving_cfg: dict={},
+        testing_cfg: dict={},
+        ema_cfg: dict={},
+        speed_cfg: dict={},
+        tboard_cfg: dict={},
     ) -> None:
         """Configure a training phase: store config, dataset info, rebuild scheduler and callbacks.
 
@@ -260,19 +264,18 @@ class PrefixTrainer:
             epoch_num: number of epochs for this phase.
             column_str: dataset column to read; if 'indice' in name, use vectorize_indices.
             *_cfg: phase-local configuration dictionaries stored as the current config.
-            overwrite_opt: if True, force-recreate scheduler and callbacks even if they exist.
         """
-        self._config['batch'] = dict(batch_cfg or {})
-        self._config['loss'] = dict(loss_cfg or {})
-        self._config['gradient'] = dict(gradient_cfg or {})
-        self._config['training'] = dict(training_cfg or {})
-        self._config['logging'] = dict(logging_cfg or {})
-        self._config['scheduler'] = dict(scheduler_cfg or {})
-        self._config['saving'] = dict(saving_cfg or {})
-        self._config['testing'] = dict(testing_cfg or {})
-        self._config['ema'] = dict(ema_cfg or {})
-        self._config['speed'] = dict(speed_cfg or {})
-        self._config['tboard'] = dict(tboard_cfg or {})
+        self._config['batch'] = dict(batch_cfg) if isinstance(batch_cfg, dict) else {}
+        self._config['loss'] = dict(loss_cfg) if isinstance(loss_cfg, dict) else {}
+        self._config['gradient'] = dict(gradient_cfg) if isinstance(gradient_cfg, dict) else {}
+        self._config['training'] = dict(training_cfg) if isinstance(training_cfg, dict) else {}
+        self._config['logging'] = dict(logging_cfg) if isinstance(logging_cfg, dict) else {}
+        self._config['scheduler'] = dict(scheduler_cfg) if isinstance(scheduler_cfg, dict) else {}
+        self._config['saving'] = dict(saving_cfg) if isinstance(saving_cfg, dict) else {}
+        self._config['testing'] = dict(testing_cfg) if isinstance(testing_cfg, dict) else {}
+        self._config['ema'] = dict(ema_cfg) if isinstance(ema_cfg, dict) else {}
+        self._config['speed'] = dict(speed_cfg) if isinstance(speed_cfg, dict) else {}
+        self._config['tboard'] = dict(tboard_cfg) if isinstance(tboard_cfg, dict) else {}
         # store phase attributes
         self._dataset_obj = dataset_obj
         self._column_str = column_str
@@ -282,8 +285,13 @@ class PrefixTrainer:
         # always recreate phase-local utilities
         self._scheduler = None
         self._callbacks = []
-        self.setup_scheduler(overwrite_opt=True)
-        self.setup_callbacks(overwrite_opt=True)
+        self.setup_scheduler(scheduler_cfg=self._config['scheduler'])
+        self.setup_callbacks(
+            speed_cfg=self._config['speed'],
+            ema_cfg=self._config['ema'],
+            logging_cfg=self._config['logging'],
+            tboard_cfg=self._config['tboard'],
+            saving_cfg=self._config['saving'])
 
     def validate_setup(self) -> None:
         """Raise AssertionError if the trainer is not ready to run a phase."""

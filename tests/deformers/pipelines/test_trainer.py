@@ -12,7 +12,7 @@ Covers:
 - close_step: resets transient tensors and scalars only on grad-update boundaries.
 - run_epoch: iterates over dataset, calls run_step and close_step, closes pbar.
 - run_phase: calls run_epoch for the correct number of epochs (uses stored phase config).
-- setup_optimizer: creates optimizer only when missing, unless overwrite_opt=True.
+- setup_optimizer: creates optimizer from valid config and ignores empty config.
 - setup_global: initializes optimizer, scaler, and context.
 - setup_phase: updates active config, stores phase dataset/column/epoch, rebuilds scheduler and callbacks.
 """
@@ -688,25 +688,52 @@ class TestSetupOptimizer:
         __t.setup_optimizer(optimizer_cfg={'lr': 1e-3})
         assert __t._optimizer is not None
 
-    def test_skips_when_already_exists(self):
+    def test_skips_when_cfg_missing(self):
         __t = self._make_base_trainer()
         __t.setup_optimizer(optimizer_cfg={'lr': 1e-3})
         __first = __t._optimizer
         __t.setup_optimizer()
         assert __t._optimizer is __first
 
-    def test_overwrites_when_flag_set(self):
+    def test_overwrites_when_valid_cfg_provided(self):
         __t = self._make_base_trainer()
         __t.setup_optimizer(optimizer_cfg={'lr': 1e-3})
         __first = __t._optimizer
-        __t.setup_optimizer(overwrite_opt=True)
+        __t.setup_optimizer(optimizer_cfg={'lr': 2e-3})
         assert __t._optimizer is not __first
+        assert __t._optimizer.param_groups[0]['lr'] == 2e-3
 
     def test_uses_custom_cfg_override(self):
         __t = self._make_base_trainer()
         __t.setup_optimizer(optimizer_cfg={'lr': 9e-9})
         __lr = __t._optimizer.param_groups[0]['lr']
         assert abs(__lr - 9e-9) < 1e-15
+
+
+# SETUP_CALLBACKS ###############################################################
+
+class TestSetupCallbacks:
+
+    def _make_base_trainer(self) -> _trainer.PrefixTrainer:
+        __student = unittest.mock.MagicMock()
+        __t = _trainer.PrefixTrainer(
+            text_tok=unittest.mock.MagicMock(),
+            byte_tok=unittest.mock.MagicMock(),
+            teacher_mod=unittest.mock.MagicMock(),
+            student_mod=__student,)
+        return __t
+
+    def test_uses_passed_configs_instead_of_internal_config(self):
+        __t = self._make_base_trainer()
+        __t._config['speed'] = {'every_num': 1, 'batch_len': 1}
+        __t.setup_callbacks()
+        assert __t._callbacks == []
+
+    def test_builds_callbacks_from_valid_configs(self):
+        __t = self._make_base_trainer()
+        __t.setup_callbacks(speed_cfg={'every_num': 1, 'batch_len': 1})
+        assert len(__t._callbacks) == 1
+        assert __t._callbacks[0]['name'] == 'speed'
 
 
 # SETUP_GLOBAL #################################################################
