@@ -723,7 +723,7 @@ class TestSetupCallbacks:
             student_mod=__student,)
         return __t
 
-    def test_uses_passed_configs_instead_of_internal_config(self):
+    def test_empty_configs_do_not_reuse_internal_config(self):
         __t = self._make_base_trainer()
         __t._config['speed'] = {'every_num': 1, 'batch_len': 1}
         __t.setup_callbacks()

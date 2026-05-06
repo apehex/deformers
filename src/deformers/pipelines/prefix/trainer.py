@@ -142,8 +142,8 @@ class PrefixTrainer:
 
     # SETUP ####################################################################
 
-    def _valid_config(self, config_dict: object, required_arr: tuple[str, ...]=()) -> bool:
-        return isinstance(config_dict, dict) and all(__key in config_dict for __key in required_arr)
+    def _valid_config(self, config_dict: object, required_keys: tuple[str, ...]=()) -> bool:
+        return isinstance(config_dict, dict) and all(__key in config_dict for __key in required_keys)
 
     def setup_state(self, override_cfg: dict={}) -> None:
         """Reinitialize the runtime state."""
