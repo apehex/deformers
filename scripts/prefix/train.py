@@ -137,22 +137,17 @@ PREFIX_CFG = {
 
 # TRAINING UTILITIES CONFIG (shared across phases) #############################
 
-# 'dtype' and 'device' are the exact keys the trainer's step_batch reads.
-# Vectorized mask/input_ids/byte patches are created with this integer dtype.
-# Mixed-precision compute is handled separately via setup_context().
 TRAINING_CFG = {
     'dtype': torch.long,
-    'device': MAIN_CFG['device_str'],
-    'epoch_num': 4,}
+    'device': MAIN_CFG['device_str'],}
 
 OPTIMIZER_CFG = {
     'lr': MAIN_CFG['learning_rate'],
     'betas': (0.9, 0.999),
     'weight_decay': 0.01,}
 
-# GradScaler is only meaningful for float16; bfloat16 uses a no-op scaler
 SCALER_CFG = {
-    'enabled': MAIN_CFG['dtype_obj'] == torch.float16,}
+    'enabled': MAIN_CFG['dtype_obj'] == torch.float16,} # GradScaler is only meaningful for float16
 
 GRADIENT_CFG = {
     'every_num': MAIN_CFG['accumulation_num'],
@@ -196,19 +191,12 @@ SAVING_CFG = {
     'path_str': os.path.abspath('checkpoints/prefix.pt'),}
 
 # PHASE 1 CONFIG: Uniform vocabulary warm-up ###################################
-#
-# Only depth-0 (embedding) losses are active.  Setting mse_k_rate and
-# cos_k_rate to zero means the teacher trunk is never called for depth-k
-# hidden states, which avoids expensive trunk forward passes during this
-# vocabulary coverage phase.
-#
-# The goal is a token-agnostic byte-to-embedding mapping: every vocabulary
-# token should produce a reasonable prefix embedding before we encounter
-# natural-language token frequencies in phase 2.
+
 PHASE1_CFG = {
     'name': 'uniform',
-    'epoch_num': 2,
-    'column_str': 'indices',
+    'phase': {
+        'epoch_num': 2,
+        'column_str': 'indices',},
     'loss': {
         'mse_k_rate': 0.0,
         'cos_k_rate': 0.0,},
@@ -217,24 +205,20 @@ PHASE1_CFG = {
         'end_rate': 5e-2,
         'warmup_num': 128,},
     'logging': {
-        'path_str': os.path.abspath('logs/prefix_phase1.log'),},
+        'path_str': os.path.abspath('logs/phase1/prefix.log'),},
     'tboard': {
         'path_str': os.path.abspath('logs/phase1/'),},}
 
 # PHASE 2 CONFIG: Wikipedia text fine-tuning ###################################
-#
-# Both depth-0 and depth-k losses are active so the student learns to align
-# its representations with the teacher at every measured depth.
-#
-# The optimizer and student model carry over from phase 1: weights and
-# optimizer momentum are preserved.  Only the LR schedule resets via a new
-# WaveLR instance bound to the same optimizer.
+
 PHASE2_CFG = {
     'name': 'wikipedia',
-    'epoch_num': 4,
-    'column_str': 'text',
+    'phase': {
+        'epoch_num': 4,
+        'column_str': 'text',},
+    'scheduler': {},
     'logging': {
-        'path_str': os.path.abspath('logs/prefix_phase2.log'),},
+        'path_str': os.path.abspath('logs/phase2/prefix.log'),},
     'tboard': {
         'path_str': os.path.abspath('logs/phase2/'),},}
 
@@ -255,16 +239,16 @@ TEXT_TOK.pad_token = TEXT_TOK.eos_token if not bool(TEXT_TOK.pad_token) else TEX
 # DATASETS #####################################################################
 
 print('[init] downloading the main dataset...')
-DATASETS = {'wikipedia': datasets.load_dataset(**DATASET_CFG['wikipedia']).select_columns(['text']),}
+DATASETS = {'wikipedia': datasets.load_dataset(**DATASET_CFG['wikipedia']),}
+
+print('[init] preprocessing the main dataset...')
+DATASETS['wikipedia'] = DATASETS['wikipedia'].select_columns(['text']).iter(batch_size=BATCH_CFG['batch_dim'])
 
 print('[init] building a random dataset...')
 DATASETS['random'] = deformers.datasets.random.build_uniform_dataset(**DATASET_CFG['random'])
 
-# compute step counts per epoch (used to calibrate scheduler total_num)
-# the random dataset rows are pre-batched so each row == one training step
-# the wikipedia dataset rows are single sequences; divide by batch_dim
 RANDOM_DIM = len(DATASETS['random'])
-WIKI_DIM = len(DATASETS['wikipedia']) // BATCH_CFG['batch_dim']
+WIKI_DIM = len(DATASETS['wikipedia'])
 
 # MODELS #######################################################################
 
@@ -311,42 +295,11 @@ mlable.models.free_memory()
 print('[check] showing the prefix architecture...')
 print(PREFIX_MOD)
 
-# DATASET WRAPPER ##############################################################
-
-class BatchedDataset:
-    """Wraps a HuggingFace Dataset to expose batch-level len() and iter().
-
-    The trainer's init_epoch expects an object where len() returns the number
-    of training steps (batches) and iter() yields one batch dict per step.
-    A raw HuggingFace Dataset yields individual rows; this wrapper corrects
-    that for datasets where each row is a single text sequence (e.g.
-    Wikipedia).
-
-    The random dataset rows are already pre-batched (each row == one
-    mini-batch of batch_dim sequences), so it is passed to the trainer
-    directly without wrapping.
-    """
-    def __init__(self, dataset: object, batch_dim: int) -> None:
-        self._dataset = dataset
-        self._batch_dim = int(batch_dim)
-
-    def __len__(self) -> int:
-        return len(self._dataset) // self._batch_dim
-
-    def __iter__(self) -> object:
-        return self._dataset.iter(batch_size=self._batch_dim)
-
 # TRAINER ######################################################################
-#
-# A single PrefixTrainer instance is reused across both phases.
-# setup_global() creates the long-lived utilities (optimizer, scaler, context)
-# that persist and carry optimizer momentum from phase 1 to phase 2.
-# setup_phase() reconfigures the phase-local utilities (scheduler, callbacks)
-# from the config passed for the current phase.
 
 print('[init] calibrating scheduler step counts...')
-PHASE1_SCHEDULER_TOTAL = max(1, (PHASE1_CFG['epoch_num'] * RANDOM_DIM) // GRADIENT_CFG['every_num'])
-PHASE2_SCHEDULER_TOTAL = max(1, (PHASE2_CFG['epoch_num'] * WIKI_DIM) // GRADIENT_CFG['every_num'])
+PHASE1_CFG['scheduler']['total_num'] = max(1, (PHASE1_CFG['epoch_num'] * RANDOM_DIM) // GRADIENT_CFG['every_num'])
+PHASE2_CFG['scheduler']['total_num'] = max(1, (PHASE2_CFG['epoch_num'] * WIKI_DIM) // GRADIENT_CFG['every_num'])
 
 print('[init] building trainer...')
 TRAINER = deformers.pipelines.prefix.trainer.PrefixTrainer(
@@ -357,76 +310,54 @@ TRAINER = deformers.pipelines.prefix.trainer.PrefixTrainer(
 
 print('[init] setting up long-lived utilities (optimizer / scaler / context)...')
 TRAINER.setup_global(
-    training_cfg=TRAINING_CFG,
+    global_cfg=TRAINING_CFG,
     optimizer_cfg=OPTIMIZER_CFG,
     scaler_cfg=SCALER_CFG,)
 
 # PHASE 1: UNIFORM VOCABULARY WARM-UP ##########################################
-#
-# Only depth-0 (embedding) losses are active.  Setting mse_k_rate and
-# cos_k_rate to zero means the teacher trunk is never called for depth-k
-# hidden states, which avoids expensive trunk forward passes during this
-# vocabulary coverage phase.
-#
-# The random dataset is passed directly: each of its rows is a pre-batched
-# mini-batch so init_epoch sees len(DATASETS['random']) steps per epoch.
 
-print('[phase1] configuring phase...')
+print('[phase 1] configuring phase...')
 TRAINER.setup_phase(
     dataset_obj=DATASETS['random'],
-    epoch_num=PHASE1_CFG['epoch_num'],
-    column_str=PHASE1_CFG['column_str'],
+    phase_cfg=PHASE1_CFG,
     batch_cfg=BATCH_CFG,
     loss_cfg={**LOSS_CFG, **PHASE1_CFG.get('loss', {})},
     gradient_cfg=GRADIENT_CFG,
-    training_cfg=TRAINING_CFG,
-    logging_cfg={**LOGGING_CFG, **PHASE1_CFG.get('logging', {})},
-    scheduler_cfg={**SCHEDULER_CFG, **PHASE1_CFG.get('scheduler', {}), 'total_num': PHASE1_SCHEDULER_TOTAL},
-    saving_cfg=SAVING_CFG,
+    scheduler_cfg={**SCHEDULER_CFG, **PHASE1_CFG.get('scheduler', {})},
     testing_cfg=TESTING_CFG,
     ema_cfg=EMA_CFG,
     speed_cfg=SPEED_CFG,
-    tboard_cfg={**TBOARD_CFG, **PHASE1_CFG.get('tboard', {})},)
+    logging_cfg={**LOGGING_CFG, **PHASE1_CFG.get('logging', {})},
+    tboard_cfg={**TBOARD_CFG, **PHASE1_CFG.get('tboard', {})},
+    saving_cfg=SAVING_CFG,)
 
-print('[phase1] training on uniform vocabulary coverage...')
+print('[phase 1] training on uniform vocabulary coverage...')
 TRAINER.run_phase()
 
-print('[phase1] cleaning up...')
+print('[phase 1] cleaning up...')
 TRAINER.cleanup_callbacks()
 
 # PHASE 2: WIKIPEDIA TEXT FINE-TUNING ##########################################
-#
-# Both depth-0 and depth-k losses are active so the student learns to align
-# its representations with the teacher at every measured depth.
-#
-# The optimizer and student model carry over from phase 1: weights and
-# optimizer momentum are preserved.  Only the LR schedule resets via a new
-# WaveLR instance bound to the same optimizer.
-#
-# Wikipedia rows are single sequences so BatchedDataset wraps the dataset to
-# group rows into mini-batches of batch_dim sequences each.
 
-print('[phase2] configuring phase...')
+print('[phase 2] configuring phase...')
 TRAINER.setup_phase(
-    dataset_obj=BatchedDataset(DATASETS['wikipedia'], BATCH_CFG['batch_dim']),
-    epoch_num=PHASE2_CFG['epoch_num'],
-    column_str=PHASE2_CFG['column_str'],
+    dataset_obj=DATASETS['wikipedia'],
+    phase_cfg=PHASE2_CFG,
     batch_cfg=BATCH_CFG,
     loss_cfg={**LOSS_CFG, **PHASE2_CFG.get('loss', {})},
     gradient_cfg=GRADIENT_CFG,
-    training_cfg=TRAINING_CFG,
-    logging_cfg={**LOGGING_CFG, **PHASE2_CFG.get('logging', {})},
-    scheduler_cfg={**SCHEDULER_CFG, **PHASE2_CFG.get('scheduler', {}), 'total_num': PHASE2_SCHEDULER_TOTAL},
-    saving_cfg=SAVING_CFG,
+    scheduler_cfg={**SCHEDULER_CFG, **PHASE2_CFG.get('scheduler', {})},
     testing_cfg=TESTING_CFG,
     ema_cfg=EMA_CFG,
     speed_cfg=SPEED_CFG,
-    tboard_cfg={**TBOARD_CFG, **PHASE2_CFG.get('tboard', {})},)
+    logging_cfg={**LOGGING_CFG, **PHASE2_CFG.get('logging', {})},
+    tboard_cfg={**TBOARD_CFG, **PHASE2_CFG.get('tboard', {})},
+    saving_cfg=SAVING_CFG,)
 
-print('[phase2] training on Wikipedia...')
+print('[phase 2] training on Wikipedia...')
 TRAINER.run_phase()
 
-print('[phase2] cleaning up...')
+print('[phase 2] cleaning up...')
 TRAINER.cleanup_callbacks()
 
 # DATAVIZ ######################################################################
