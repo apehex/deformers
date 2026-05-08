@@ -12,6 +12,7 @@ def _build_prefix(**kwargs):
         'output_dim': 12,
         'patch_dim': -1,
         'hidden_dim': -1,
+        'padding_idx': 128,
         'block_num': 3,
         'head_num': 2,
         'dropout_rate': 0.0,
