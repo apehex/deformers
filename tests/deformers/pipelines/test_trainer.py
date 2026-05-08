@@ -151,8 +151,8 @@ class TestInitState:
         __state = __t.init_state()
         assert __state['scalars']['switch/grad'] == 0
 
-    def test_scalars_has_epoch_total_from_config(self):
-        __t = _make_trainer(epoch_num=7)
+    def test_scalars_epoch_total_defaults_to_one(self):
+        __t = _make_trainer()
         __state = __t.init_state()
         assert __state['scalars']['epoch/total'] == 1
 
