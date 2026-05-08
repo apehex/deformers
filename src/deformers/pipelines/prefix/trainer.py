@@ -238,9 +238,12 @@ class PrefixTrainer:
             self.setup_scaler(scaler_cfg=scaler_cfg)
         if overwrite_opt or self._context is None:
             self._context = None
-            __context_cfg = dict(context_cfg) if isinstance(context_cfg, dict) and bool(context_cfg) else {
-                'device': self._config['training'].get('device', 'cpu'),
-                'dtype': self._config['training'].get('dtype', torch.float32),}
+            if isinstance(context_cfg, dict) and bool(context_cfg):
+                __context_cfg = dict(context_cfg)
+            else:
+                __context_cfg = {
+                    'device': self._config['training'].get('device', 'cpu'),
+                    'dtype': self._config['training'].get('dtype', torch.float32),}
             self.setup_context(context_cfg=__context_cfg)
 
     def setup_phase(
