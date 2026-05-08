@@ -895,6 +895,12 @@ class TestSetupPhase:
         )
         assert __t._config['batch'] == {}
 
+    def test_batch_cfg_with_batch_dim_is_stored(self):
+        __t = self._make_ready_trainer()
+        __batch_cfg = {'batch_dim': 2, 'sequence_dim': 4, 'patch_dim': 2, 'left_pad': True}
+        self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text', batch_cfg=__batch_cfg)
+        assert __t._config['batch']['batch_dim'] == 2
+
     def test_creates_scheduler_when_cfg_provided(self):
         __t = self._make_ready_trainer()
         self._setup_phase(
