@@ -139,11 +139,15 @@ PREFIX_CFG = {
 
 # 'dtype' and 'device' are the exact keys the trainer's step_batch reads.
 # Vectorized mask/input_ids/byte patches are created with this integer dtype.
-# Mixed-precision compute is handled separately via setup_context().
+# Mixed-precision compute is handled separately via context_cfg in setup_global().
 TRAINING_CFG = {
     'dtype': torch.long,
     'device': MAIN_CFG['device_str'],
     'epoch_num': 4,}
+
+CONTEXT_CFG = {
+    'dtype': MAIN_CFG['dtype_obj'],
+    'device': MAIN_CFG['device_str'],}
 
 OPTIMIZER_CFG = {
     'lr': MAIN_CFG['learning_rate'],
@@ -359,7 +363,8 @@ print('[init] setting up long-lived utilities (optimizer / scaler / context)...'
 TRAINER.setup_global(
     training_cfg=TRAINING_CFG,
     optimizer_cfg=OPTIMIZER_CFG,
-    scaler_cfg=SCALER_CFG,)
+    scaler_cfg=SCALER_CFG,
+    context_cfg=CONTEXT_CFG,)
 
 # PHASE 1: UNIFORM VOCABULARY WARM-UP ##########################################
 #

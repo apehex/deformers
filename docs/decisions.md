@@ -94,8 +94,6 @@ by the trainer from configuration.
 
 The constructor accepts:
 - external objects: text tokenizer, byte tokenizer, teacher model, student model
-- base configuration dictionaries: batch, loss, gradient, training, logging,
-  optimizer, scheduler, scaler, saving, testing, ema, speed, tboard
 
 The constructor does not accept prebuilt optimizer, scheduler, scaler, context,
 or callback objects.
@@ -103,7 +101,7 @@ or callback objects.
 ### Internal lifecycle
 
 Long-lived utilities (optimizer, scaler, autocast context) are created by
-`setup_global()` from the base configs.  They persist across phases.
+`setup_global()` from explicit setup configs. They persist across phases.
 
 Phase-local utilities (scheduler, callbacks) are created by `setup_phase()`.
 They are always recreated at the start of each phase to use phase-specific
@@ -113,7 +111,7 @@ Explicit setup methods:
 - `setup_state()` - (re)initialize the runtime state
 - `setup_optimizer()` - create AdamW from optimizer config
 - `setup_scaler()` - create GradScaler from scaler config
-- `setup_context()` - create autocast or nullcontext from training config
+- `setup_context()` - create autocast or nullcontext from context config
 - `setup_scheduler()` - create WaveLR from scheduler config
 - `setup_callbacks()` - create speed / ema / log / TensorBoard / save callbacks
 - `setup_global()` - call setup_optimizer, setup_scaler, setup_context
@@ -138,7 +136,7 @@ phase-local utilities before rebuilding them from the current phase config.
 ### Current configuration
 
 `_config` holds the trainer's current configuration. `setup_global()` stores the
-long-lived optimizer / scaler / context config, and each `setup_phase()` call
+long-lived training / optimizer / scaler / context config, and each `setup_phase()` call
 replaces the phase-local config dictionaries before rebuilding the scheduler and
 callbacks, which prevents phase 2 from accidentally inheriting phase 1 deltas.
 

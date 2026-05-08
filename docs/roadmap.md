@@ -83,6 +83,7 @@ Architecture experiments (planned):
 - [x] lifecycle-oriented trainer API:
   - [x] trainer owns utility setup from configuration (no prebuilt objects in constructor)
   - [x] `setup_global()` creates long-lived utilities (optimizer, scaler, context)
+  - [x] mixed-precision context settings are grouped in a dedicated context config
   - [x] `setup_phase()` creates phase-local utilities (scheduler, callbacks)
   - [x] single trainer instance reusable across phases; optimizer persists
   - [x] monotonically increasing global step counter across epochs and phases

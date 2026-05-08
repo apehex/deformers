@@ -53,6 +53,9 @@ def _make_config(
             'max_norm': 1.0,},
         'training': {
             'epoch_num': epoch_num,
+            'dtype': torch.long,
+            'device': 'cpu',},
+        'context': {
             'dtype': torch.float32,
             'device': 'cpu',},
         'logging': {'every_num': log_every,},
@@ -744,9 +747,10 @@ class TestSetupGlobal:
 
     def _setup_global(self, trainer: _trainer.PrefixTrainer, overwrite_opt: bool = False) -> None:
         trainer.setup_global(
-            training_cfg={'epoch_num': 1, 'dtype': torch.float32, 'device': 'cpu'},
+            training_cfg={'epoch_num': 1, 'dtype': torch.long, 'device': 'cpu'},
             optimizer_cfg={'lr': 1e-3},
             scaler_cfg={'enabled': False},
+            context_cfg={'dtype': torch.float32, 'device': 'cpu'},
             overwrite_opt=overwrite_opt)
 
     def _make_base_trainer(self) -> _trainer.PrefixTrainer:
@@ -773,6 +777,12 @@ class TestSetupGlobal:
         self._setup_global(__t)
         assert __t._context is not None
 
+    def test_context_cfg_is_stored_separately_from_training(self):
+        __t = self._make_base_trainer()
+        self._setup_global(__t)
+        assert __t._config['training']['dtype'] == torch.long
+        assert __t._config['context']['dtype'] == torch.float32
+
     def test_preserves_optimizer_across_calls(self):
         """Calling setup_global() twice should not recreate the optimizer."""
         __t = self._make_base_trainer()
@@ -787,6 +797,15 @@ class TestSetupGlobal:
         __first = __t._optimizer
         self._setup_global(__t, overwrite_opt=True)
         assert __t._optimizer is not __first
+
+    def test_fallback_context_uses_nullcontext_for_non_autocast_dtype(self):
+        __t = self._make_base_trainer()
+        __t.setup_global(
+            training_cfg={'epoch_num': 1, 'dtype': torch.long, 'device': 'cpu'},
+            optimizer_cfg={'lr': 1e-3},
+            scaler_cfg={'enabled': False},
+            context_cfg={},)
+        assert isinstance(__t._context, contextlib.nullcontext)
 
 
 # SETUP_PHASE ##################################################################

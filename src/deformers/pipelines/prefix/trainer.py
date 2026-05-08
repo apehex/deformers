@@ -84,6 +84,7 @@ class PrefixTrainer:
             'loss': {},
             'gradient': {},
             'training': {},
+            'context': {},
             'logging': {},
             'optimizer': {},
             'scheduler': {},
@@ -154,6 +155,7 @@ class PrefixTrainer:
         if not self._valid_config(optimizer_cfg, ('lr',)):
             return
         __cfg = dict(optimizer_cfg)
+        self._config['optimizer'] = dict(__cfg)
         self._optimizer = torch.optim.AdamW(self._student.parameters(), **__cfg)
         self._optimizer.zero_grad()
 
@@ -162,16 +164,18 @@ class PrefixTrainer:
         if not self._valid_config(scaler_cfg, ('enabled',)):
             return
         __cfg = dict(scaler_cfg)
+        self._config['scaler'] = dict(__cfg)
         self._scaler = torch.amp.GradScaler(**__cfg)
 
-    def setup_context(self, training_cfg: dict={}) -> None:
-        """Create the autocast context from training config."""
-        if not self._valid_config(training_cfg, ('device', 'dtype')):
+    def setup_context(self, context_cfg: dict={}) -> None:
+        """Create the autocast context from context config."""
+        if not self._valid_config(context_cfg, ('device', 'dtype')):
             return
-        __cfg = dict(training_cfg)
+        __cfg = dict(context_cfg)
+        self._config['context'] = dict(__cfg)
         __device = __cfg.get('device', 'cpu')
         __dtype = __cfg.get('dtype', torch.float32)
-        if __dtype != torch.float32:
+        if __dtype in (torch.float16, torch.bfloat16):
             self._context = torch.amp.autocast(device_type=__device, dtype=__dtype)
         else:
             self._context = contextlib.nullcontext()
@@ -181,6 +185,7 @@ class PrefixTrainer:
         if not self._valid_config(scheduler_cfg, ('start_rate', 'end_rate', 'total_num', 'warmup_num')):
             return
         __cfg = dict(scheduler_cfg)
+        self._config['scheduler'] = dict(__cfg)
         self._scheduler = mlable.schedulers.WaveLR(optimizer_obj=self._optimizer, **__cfg)
 
     def setup_callbacks(
@@ -215,6 +220,7 @@ class PrefixTrainer:
         training_cfg: dict={},
         optimizer_cfg: dict={},
         scaler_cfg: dict={},
+        context_cfg: dict={},
         overwrite_opt: bool=False,
     ) -> None:
         """Initialize long-lived utilities: optimizer, scaler, and mixed-precision context.
@@ -222,18 +228,20 @@ class PrefixTrainer:
         Utilities that already exist are left unchanged unless overwrite_opt=True.
         Call once before the first phase; the optimizer persists across all phases.
         """
-        self._config['training'] = dict(training_cfg) if isinstance(training_cfg, dict) else {}
-        self._config['optimizer'] = dict(optimizer_cfg) if isinstance(optimizer_cfg, dict) else {}
-        self._config['scaler'] = dict(scaler_cfg) if isinstance(scaler_cfg, dict) else {}
+        if isinstance(training_cfg, dict):
+            self._config['training'] = dict(training_cfg)
         if overwrite_opt or self._optimizer is None:
             self._optimizer = None
-            self.setup_optimizer(optimizer_cfg=self._config['optimizer'])
+            self.setup_optimizer(optimizer_cfg=optimizer_cfg)
         if overwrite_opt or self._scaler is None:
             self._scaler = None
-            self.setup_scaler(scaler_cfg=self._config['scaler'])
+            self.setup_scaler(scaler_cfg=scaler_cfg)
         if overwrite_opt or self._context is None:
             self._context = None
-            self.setup_context(training_cfg=self._config['training'])
+            __context_cfg = dict(context_cfg) if isinstance(context_cfg, dict) and bool(context_cfg) else {
+                'device': self._config['training'].get('device', 'cpu'),
+                'dtype': self._config['training'].get('dtype', torch.float32),}
+            self.setup_context(context_cfg=__context_cfg)
 
     def setup_phase(
         self,
