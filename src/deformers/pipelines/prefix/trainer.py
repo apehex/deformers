@@ -1,3 +1,26 @@
+"""The trainer owns:
+- mutable runtime state
+- teacher/student references (external)
+- tokenizer references (external)
+- training utility setup from per-setup configuration (optimizer/scaler/context/scheduler/callbacks)
+- current configuration
+- core training loop operations
+
+Stateless transforms such as vectorization and loss computation remain in
+`deformers.pipelines.prefix.processors`.
+
+Typical lifecycle:
+    trainer = PrefixTrainer(text_tok, byte_tok, teacher, student)
+    trainer.setup_global(global_cfg=..., optimizer_cfg=..., scaler_cfg=...)
+    trainer.setup_phase(dataset, epoch_num, column, batch_cfg=..., loss_cfg=..., ...)
+    trainer.run_phase()                     # runs all epochs
+    trainer.cleanup_callbacks()
+
+    trainer.setup_phase(dataset2, epoch_num2, column2, batch_cfg=..., loss_cfg=..., ...)
+    trainer.run_phase()
+    trainer.cleanup_callbacks()
+"""
+
 import contextlib
 import time
 
@@ -40,30 +63,9 @@ def is_text(data: object) -> bool:
 # TRAINER ######################################################################
 
 class PrefixTrainer:
-    """Thin orchestration class for prefix training phases.
+    """Thin orchestration class for the prefix training phases."""
 
-    The trainer owns:
-    - mutable runtime state
-    - teacher/student references (external)
-    - tokenizer references (external)
-    - training utility setup from per-setup configuration (optimizer/scaler/context/scheduler/callbacks)
-    - current configuration
-    - core training loop operations
-
-    Stateless transforms such as vectorization and loss computation remain in
-    `deformers.pipelines.prefix.processors`.
-
-    Typical lifecycle:
-        trainer = PrefixTrainer(text_tok, byte_tok, teacher, student)
-        trainer.setup_global(training_cfg=..., optimizer_cfg=..., scaler_cfg=...)
-        trainer.setup_phase(dataset, epoch_num, column, batch_cfg=..., loss_cfg=..., ...)
-        trainer.run_phase()                     # runs all epochs
-        trainer.cleanup_callbacks()
-
-        trainer.setup_phase(dataset2, epoch_num2, column2, batch_cfg=..., loss_cfg=..., ...)
-        trainer.run_phase()
-        trainer.cleanup_callbacks()
-    """
+    # INIT #####################################################################
 
     def __init__(
         self,
@@ -78,37 +80,38 @@ class PrefixTrainer:
         # targets of the training (external)
         self._teacher = teacher_mod
         self._student = student_mod
-        # current configuration
-        self._config = {
-            'batch': {},
-            'loss': {},
-            'gradient': {},
-            'training': {},
-            'logging': {},
-            'optimizer': {},
-            'scheduler': {},
-            'scaler': {},
-            'saving': {},
-            'testing': {},
-            'ema': {},
-            'speed': {},
-            'tboard': {},}
         # training utilities (populated by setup_* methods, not the constructor)
-        self._optimizer = None
-        self._scheduler = None
-        self._scaler = None
         self._context = None
-        self._callbacks = []
+        self._optimizer = None
+        self._scaler = None
         # current phase attributes (set by setup_phase)
-        self._dataset_obj = None
-        self._column_str = None
-        self._epoch_num = None
+        self._scheduler = None
+        self._dataset = None
+        # can be changed at any time
+        self._callbacks = []
+        # empty configuration
+        self._config = self.init_config()
         # initialize the state
         self._state = self.init_state()
 
-    # STATE ####################################################################
+    def init_config(self) -> dict[str, dict]:
+        return {
+            'global': {}, # dtype and device
+            'optimizer': {}, # global level
+            'scaler': {}, # global level
+            'phase': {}, # phase level
+            'batch': {}, # phase level
+            'loss': {}, # phase level
+            'gradient': {}, # phase level
+            'scheduler': {}, # phase level
+            'testing': {}, # callback
+            'ema': {}, # callback
+            'speed': {}, # callback
+            'logging': {}, # callback
+            'tboard': {}, # callback
+            'saving': {},} # callback
 
-    def init_state(self, override: dict | None = None) -> dict[str, dict]:
+    def init_state(self, override: dict={}) -> dict[str, dict]:
         """Build the nested runtime state, optionally overriding `tensors` and `scalars`."""
         override = dict(override or {})
         return {
@@ -119,7 +122,7 @@ class PrefixTrainer:
                     'switch/grad': 0,
                     'switch/log': 0,
                     'switch/save': 0,
-                    'epoch/total': int(self._config['training'].get('epoch_num', 4)),
+                    'epoch/total': 1,
                     'epoch/current': 1,
                     'step/total': 0,
                     'step/global': 0,
@@ -140,179 +143,176 @@ class PrefixTrainer:
                     'vocab/max': 0,},
                 **override.get('scalars', {}),},}
 
-    # SETUP ####################################################################
+    # CONFIG ###################################################################
 
-    def _valid_config(self, config_dict: object, required_keys: tuple[str, ...]=()) -> bool:
+    def _check_config(self, config_dict: object, required_keys: tuple[str]=()) -> bool:
+        """Check whether an input configuration has the right format."""
         return isinstance(config_dict, dict) and all(__key in config_dict for __key in required_keys)
 
-    def setup_state(self, override_cfg: dict={}) -> None:
-        """Reinitialize the runtime state."""
-        self._state = self.init_state(override_cfg)
+    def _check_setup(self) -> None:
+        """Raise AssertionError if the trainer is not ready to run a phase."""
+        assert self._context is not None, 'context is None; call setup_global() first.'
+        assert self._optimizer is not None, 'optimizer is None; call setup_global() first.'
+        assert self._scaler is not None, 'scaler is None; call setup_global() first.'
+        assert self._scheduler is not None, 'scheduler is None; call setup_phase() first.'
+        assert self._dataset is not None, 'dataset is None; call setup_phase() first.'
+
+    # GLOBAL ###################################################################
+
+    def setup_context(self, global_cfg: dict={}) -> None:
+        """Create the autocast context from training config."""
+        if self._check_config(global_cfg, ('device', 'dtype')):
+            # save the configuration for import / export
+            self._config['global'] = global_cfg
+            # default to a no-op context
+            self._context = contextlib.nullcontext()
+            # use mixed precision otherwise
+            __dtype = global_cfg.get('dtype', torch.float32)
+            if __dtype != torch.float32:
+                self._context = torch.amp.autocast(
+                    device_type=global_cfg.get('device', 'cpu'),
+                    dtype=__dtype)
 
     def setup_optimizer(self, optimizer_cfg: dict={}) -> None:
         """Create the AdamW optimizer from config."""
-        if not self._valid_config(optimizer_cfg, ('lr',)):
-            return
-        __cfg = dict(optimizer_cfg)
-        self._optimizer = torch.optim.AdamW(self._student.parameters(), **__cfg)
-        self._optimizer.zero_grad()
+        if self._check_config(optimizer_cfg, ('lr',)):
+            # save the configuration for import / export
+            self._config['optimizer'] = optimizer_cfg
+            # operate on the student model only
+            self._optimizer = torch.optim.AdamW(self._student.parameters(), **optimizer_cfg)
+            # make sure the gradients start at 0
+            self._optimizer.zero_grad()
 
     def setup_scaler(self, scaler_cfg: dict={}) -> None:
         """Create the GradScaler from config."""
-        if not self._valid_config(scaler_cfg, ('enabled',)):
-            return
-        __cfg = dict(scaler_cfg)
-        self._scaler = torch.amp.GradScaler(**__cfg)
+        if self._check_config(scaler_cfg, ('enabled',)):
+            # save the configuration for import / export
+            self._config['scaler'] = scaler_cfg
+            # reduce gradient underflow with dtype float16
+            self._scaler = torch.amp.GradScaler(**dict(scaler_cfg))
 
-    def setup_context(self, training_cfg: dict={}) -> None:
-        """Create the autocast context from training config."""
-        if not self._valid_config(training_cfg, ('device', 'dtype')):
-            return
-        __cfg = dict(training_cfg)
-        __device = __cfg.get('device', 'cpu')
-        __dtype = __cfg.get('dtype', torch.float32)
-        if __dtype != torch.float32:
-            self._context = torch.amp.autocast(device_type=__device, dtype=__dtype)
-        else:
-            self._context = contextlib.nullcontext()
+    def setup_global(
+        self,
+        global_cfg: dict={},
+        optimizer_cfg: dict={},
+        scaler_cfg: dict={},
+        overwrite_opt: bool=False,
+    ) -> None:
+        """Initialize long-lived utilities: optimizer, scaler, and mixed-precision context."""
+        if overwrite_opt or self._context is None:
+            self._context = None
+            self.setup_context(global_cfg=global_cfg)
+        if overwrite_opt or self._optimizer is None:
+            self._optimizer = None
+            self.setup_optimizer(optimizer_cfg=optimizer_cfg)
+        if overwrite_opt or self._scaler is None:
+            self._scaler = None
+            self.setup_scaler(scaler_cfg=scaler_cfg)
+
+    # PHASE ####################################################################
+
+    def setup_configs(
+        self,
+        phase_cfg: dict={},
+        batch_cfg: dict={},
+        loss_cfg: dict={},
+        gradient_cfg: dict={},
+    ) -> None:
+        if self._check_config(phase_cfg, ('column_str', 'epoch_num')):
+            self._config['phase'] = phase_cfg
+            self._state['scalars']['epoch/total'] = self._config['phase']['epoch_num']
+        if self._check_config(batch_cfg, ('batch_dim', 'sequence_dim', 'patch_dim')):
+            self._config['batch'] = batch_cfg
+        if self._check_config(loss_cfg, ('mse_0_rate', 'mse_k_rate', 'cos_0_rate', 'cos_k_rate')):
+            self._config['loss'] = loss_cfg
+        if self._check_config(gradient_cfg, ('every_num', 'max_norm')):
+            self._config['gradient'] = gradient_cfg
 
     def setup_scheduler(self, scheduler_cfg: dict={}) -> None:
         """Create a WaveLR scheduler from config."""
-        if not self._valid_config(scheduler_cfg, ('start_rate', 'end_rate', 'total_num', 'warmup_num')):
-            return
-        __cfg = dict(scheduler_cfg)
-        self._scheduler = mlable.schedulers.WaveLR(optimizer_obj=self._optimizer, **__cfg)
+        if self._check_config(scheduler_cfg, ('start_rate', 'end_rate', 'total_num', 'warmup_num')):
+            # save the configuration for import / export
+            self._config['scheduler'] = scheduler_cfg
+            # linear warmup + cosine decay
+            self._scheduler = mlable.schedulers.WaveLR(optimizer_obj=self._optimizer, **scheduler_cfg)
 
     def setup_callbacks(
         self,
-        speed_cfg: dict={},
+        testing_cfg: dict={},
         ema_cfg: dict={},
+        speed_cfg: dict={},
         logging_cfg: dict={},
         tboard_cfg: dict={},
         saving_cfg: dict={},
     ) -> None:
         """Build the phase callbacks from the provided configs."""
-        __speed = dict(speed_cfg) if isinstance(speed_cfg, dict) else {}
-        __ema = dict(ema_cfg) if isinstance(ema_cfg, dict) else {}
-        __logging = dict(logging_cfg) if isinstance(logging_cfg, dict) else {}
-        __tboard = dict(tboard_cfg) if isinstance(tboard_cfg, dict) else {}
-        __saving = dict(saving_cfg) if isinstance(saving_cfg, dict) else {}
-        __result = []
-        if self._valid_config(__speed, ('every_num', 'batch_len')) and int(__speed.get('every_num', 0)) > 0 and int(__speed.get('batch_len', 0)) > 0:
-            __result.append(_callbacks.prepare_speed_callback(**__speed))
-        if self._valid_config(__ema, ('every_num', 'start_num', 'smooth_rate')) and int(__ema.get('every_num', 0)) > 0:
-            __result.append(_callbacks.prepare_ema_callback(**__ema))
-        if self._valid_config(__logging, ('every_num', 'path_str')) and int(__logging.get('every_num', 0)) > 0 and __logging.get('path_str'):
-            __result.append(_callbacks.prepare_logging_callback(**__logging))
-        if self._valid_config(__tboard, ('every_num', 'path_str')) and int(__tboard.get('every_num', 0)) > 0 and __tboard.get('path_str'):
-            __result.append(_callbacks.prepare_tensorboard_callback(**__tboard))
-        if self._valid_config(__saving, ('every_num', 'path_str')) and int(__saving.get('every_num', 0)) > 0 and __saving.get('path_str'):
-            __result.append(_callbacks.prepare_saving_callback(model_obj=self._student, **__saving))
-        self._callbacks = __result
-
-    def setup_global(
-        self,
-        training_cfg: dict={},
-        optimizer_cfg: dict={},
-        scaler_cfg: dict={},
-        overwrite_opt: bool=False,
-    ) -> None:
-        """Initialize long-lived utilities: optimizer, scaler, and mixed-precision context.
-
-        Utilities that already exist are left unchanged unless overwrite_opt=True.
-        Call once before the first phase; the optimizer persists across all phases.
-        """
-        self._config['training'] = dict(training_cfg) if isinstance(training_cfg, dict) else {}
-        self._config['optimizer'] = dict(optimizer_cfg) if isinstance(optimizer_cfg, dict) else {}
-        self._config['scaler'] = dict(scaler_cfg) if isinstance(scaler_cfg, dict) else {}
-        if overwrite_opt or self._optimizer is None:
-            self._optimizer = None
-            self.setup_optimizer(optimizer_cfg=self._config['optimizer'])
-        if overwrite_opt or self._scaler is None:
-            self._scaler = None
-            self.setup_scaler(scaler_cfg=self._config['scaler'])
-        if overwrite_opt or self._context is None:
-            self._context = None
-            self.setup_context(training_cfg=self._config['training'])
+        self._callbacks = []
+        # todo
+        self._config['testing'] = testing_cfg
+        # overwrite the list of callbacks, even when there are none
+        if self._check_config(ema_cfg, ('every_num', 'start_num', 'smooth_rate')):
+            self._config['ema'] = ema_cfg
+            self._callbacks.append(_callbacks.prepare_ema_callback(**ema_cfg))
+        if self._check_config(speed_cfg, ('every_num', 'batch_len')):
+            self._config['speed'] = speed_cfg
+            self._callbacks.append(_callbacks.prepare_speed_callback(**speed_cfg))
+        if self._check_config(logging_cfg, ('every_num', 'path_str')):
+            self._config['logging'] = logging_cfg
+            self._callbacks.append(_callbacks.prepare_logging_callback(**logging_cfg))
+        if self._check_config(tboard_cfg, ('every_num', 'path_str')):
+            self._config['tboard'] = tboard_cfg
+            self._callbacks.append(_callbacks.prepare_tensorboard_callback(**tboard_cfg))
+        if self._check_config(saving_cfg, ('every_num', 'path_str')):
+            self._config['saving'] = saving_cfg
+            self._callbacks.append(_callbacks.prepare_saving_callback(model_obj=self._student, **saving_cfg))
 
     def setup_phase(
         self,
         dataset_obj: object,
-        epoch_num: int,
-        column_str: str,
+        phase_cfg: dict={},
         batch_cfg: dict={},
         loss_cfg: dict={},
         gradient_cfg: dict={},
-        training_cfg: dict={},
-        logging_cfg: dict={},
         scheduler_cfg: dict={},
-        saving_cfg: dict={},
         testing_cfg: dict={},
         ema_cfg: dict={},
         speed_cfg: dict={},
+        logging_cfg: dict={},
         tboard_cfg: dict={},
+        saving_cfg: dict={},
     ) -> None:
-        """Configure a training phase: store config, dataset info, rebuild scheduler and callbacks.
-
-        The current phase config is replaced on each call.
-        The scheduler is always recreated to use the phase-specific schedule.
-        The callbacks are always recreated to use phase-specific paths and settings.
-        The optimizer is preserved unless overwrite_opt=True is passed to setup_global().
-
-        Args:
-            dataset_obj: iterable dataset that supports len() (batches per epoch).
-            epoch_num: number of epochs for this phase.
-            column_str: dataset column to read; if 'indice' in name, use vectorize_indices.
-            *_cfg: phase-local configuration dictionaries stored as the current config.
-        """
-        self._config['batch'] = dict(batch_cfg) if isinstance(batch_cfg, dict) else {}
-        self._config['loss'] = dict(loss_cfg) if isinstance(loss_cfg, dict) else {}
-        self._config['gradient'] = dict(gradient_cfg) if isinstance(gradient_cfg, dict) else {}
-        self._config['training'] = dict(training_cfg) if isinstance(training_cfg, dict) else {}
-        self._config['logging'] = dict(logging_cfg) if isinstance(logging_cfg, dict) else {}
-        self._config['scheduler'] = dict(scheduler_cfg) if isinstance(scheduler_cfg, dict) else {}
-        self._config['saving'] = dict(saving_cfg) if isinstance(saving_cfg, dict) else {}
-        self._config['testing'] = dict(testing_cfg) if isinstance(testing_cfg, dict) else {}
-        self._config['ema'] = dict(ema_cfg) if isinstance(ema_cfg, dict) else {}
-        self._config['speed'] = dict(speed_cfg) if isinstance(speed_cfg, dict) else {}
-        self._config['tboard'] = dict(tboard_cfg) if isinstance(tboard_cfg, dict) else {}
-        # store phase attributes
-        self._dataset_obj = dataset_obj
-        self._column_str = column_str
-        self._epoch_num = int(epoch_num)
-        self._config['training']['epoch_num'] = self._epoch_num
-        self._state['scalars']['epoch/total'] = self._epoch_num
+        """Configure a training phase: store config, dataset info, rebuild scheduler and callbacks."""
+        self._dataset = dataset_obj
+        # overwrite the configurations
+        self.setup_configs(
+            phase_cfg=phase_cfg,
+            batch_cfg=batch_cfg,
+            loss_cfg=loss_cfg,
+            gradient_cfg=gradient_cfg)
         # always recreate phase-local utilities
         self._scheduler = None
+        self.setup_scheduler(scheduler_cfg=scheduler_cfg)
+        # could remain empty
         self._callbacks = []
-        self.setup_scheduler(scheduler_cfg=self._config['scheduler'])
         self.setup_callbacks(
-            speed_cfg=self._config['speed'],
-            ema_cfg=self._config['ema'],
-            logging_cfg=self._config['logging'],
-            tboard_cfg=self._config['tboard'],
-            saving_cfg=self._config['saving'])
-
-    def validate_setup(self) -> None:
-        """Raise AssertionError if the trainer is not ready to run a phase."""
-        assert self._optimizer is not None, 'optimizer is None; call setup_global() first.'
-        assert self._scaler is not None, 'scaler is None; call setup_global() first.'
-        assert self._context is not None, 'context is None; call setup_global() first.'
-        assert self._dataset_obj is not None, 'dataset is None; call setup_phase() first.'
-        assert self._column_str is not None, 'column is None; call setup_phase() first.'
-        assert self._epoch_num is not None, 'epoch count is None; call setup_phase() first.'
-
-    # PHASE ####################################################################
+            testing_cfg=testing_cfg,
+            ema_cfg=ema_cfg,
+            speed_cfg=speed_cfg,
+            logging_cfg=logging_cfg,
+            tboard_cfg=tboard_cfg,
+            saving_cfg=saving_cfg)
 
     def run_phase(self) -> None:
         """Run all epochs of the current phase using config set by setup_phase()."""
-        self.validate_setup()
-        for __epoch in range(self._epoch_num):
+        # make sure all the training utilities are there 
+        self._check_setup()
+        # the previous step implies that the configs are valid
+        for __epoch in range(self._config['phase']['epoch_num']):
             self.run_epoch(
                 epoch_num=__epoch,
-                epoch_tot=self._epoch_num,
-                dataset_obj=self._dataset_obj,
-                column_str=self._column_str)
+                epoch_tot=self._config['phase']['epoch_num'],
+                dataset_obj=self._dataset,
+                column_str=self._config['phase']['column_str'])
 
     # EPOCH ####################################################################
 
@@ -419,8 +419,8 @@ class PrefixTrainer:
         __args = {
             'text_tok': self._text_tok,
             'byte_tok': self._byte_tok,
-            'dtype_obj': self._config['training'].get('dtype', torch.long),
-            'device_str': self._config['training'].get('device', 'cpu'),
+            'dtype_obj': self._config['global'].get('dtype', torch.long),
+            'device_str': self._config['global'].get('device', 'cpu'),
             'sequence_dim': int(self._config['batch']['sequence_dim']),
             'patch_dim': int(self._config['batch']['patch_dim']),
             'left_pad': bool(self._config['batch'].get('left_pad', True)),}
