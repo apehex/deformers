@@ -47,16 +47,17 @@ Objective: replace the token embedding layer while preserving model behavior.
 ## Architecture [~]
 
 Current implementation:
-- [x] `CompositeBytePrefix` in `src/deformers/layers/prefix.py`
-- [x] `CompositeEmbedding(256, embed_dim, group_dim=G, merge_axes=True)` -> `(B, T, G*E)`
-- [x] `LayerNorm -> Linear -> SiLU -> Linear -> LayerNorm` projection to `hidden_size`
-- [x] lazy-build, no explicit device args, submodules registered as `self._layers`
+- [x] `CompositeBytePrefix` in `src/deformers/models/prefix.py`
+- [x] byte value + positional encoder (`ByteEncoder`) to shape `(B, T, G, E)`
+- [x] stack of byte transformer blocks (`block_num`) with attention on byte axis `G`
+- [x] first block is padding-aware, subsequent blocks attend on dense byte representations
+- [x] byte mixing + token projection to `(B, T, H)` with lazy build
 
 Architecture experiments (planned):
 - [ ] norm variant: replace LayerNorm with RMSNorm
 - [ ] no-norm variant: remove normalization layers entirely
-- [ ] attention on patch axis: add self-attention over the G byte-embedding positions within each patch
-- [ ] padding-aware byte attention: derive byte-level paddings from the padding sentinel and pass them as `key_padding_mask`
+- [x] attention on patch axis: self-attention over the G byte-embedding positions within each patch
+- [x] padding-aware byte attention in the first block (derived from padding sentinel)
 - [ ] residual pre-norm patch block:
   - [ ] `x = x + SelfAttention(RMSNorm(x), paddings)`
   - [ ] `x = x + MLP(RMSNorm(x))`

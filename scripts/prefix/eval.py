@@ -36,7 +36,7 @@ import transformers
 
 import mlable.models
 
-import deformers.layers.prefix
+import deformers.models.prefix
 import deformers.models.generic
 import deformers.pipelines.eval
 import deformers.pipelines.patch
@@ -138,7 +138,7 @@ def load_checkpoint(
     # parse the data
     __ckpt = torch.load(file_path, map_location=device_str, weights_only=True)
     # instantiate the model
-    __prefix = deformers.layers.prefix.CompositeBytePrefix(**__ckpt['config'])
+    __prefix = deformers.models.prefix.CompositeBytePrefix(**__ckpt['config'])
     # load the weights
     __prefix.load_state_dict(__ckpt['state_dict'])
     # alternative transformer prefix

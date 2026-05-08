@@ -84,6 +84,10 @@ Rationale:
 - the original embedding table is context-independent
 - preserving this property makes the prefix easier to evaluate
 
+Current implementation reference:
+- `CompositeBytePrefix` in `src/deformers/models/prefix.py`
+- block stack built from `ByteTransformer` layers with attention on byte axis `G`
+
 ## Trainer Lifecycle Design
 
 The `PrefixTrainer` follows a lifecycle-oriented API where models and tokenizers

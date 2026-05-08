@@ -15,7 +15,7 @@ import torch
 import torch.nn
 import transformers
 
-import deformers.layers.prefix
+import deformers.models.prefix
 
 
 # HELPERS ######################################################################
@@ -59,11 +59,11 @@ class TestInputsEmbedsSmoke:
         for __p in __model.parameters():
             __p.requires_grad_(False)
 
-        __prefix = deformers.layers.prefix.CompositeBytePrefix(
+        __prefix = deformers.models.prefix.CompositeBytePrefix(
             embed_dim=E,
+            output_dim=H,
             vocab_dim=256,
-            latent_dim=H,
-            group_dim=-1,)
+            patch_dim=-1,)
 
         # random byte ids
         __byte_ids = torch.randint(0, 256, (B, T, G), dtype=torch.long)
@@ -100,11 +100,11 @@ class TestInputsEmbedsSmoke:
         for __p in __model.parameters():
             __p.requires_grad_(False)
 
-        __prefix = deformers.layers.prefix.CompositeBytePrefix(
+        __prefix = deformers.models.prefix.CompositeBytePrefix(
             embed_dim=E,
+            output_dim=H,
             vocab_dim=256,
-            latent_dim=H,
-            group_dim=-1,)
+            patch_dim=-1,)
 
         __byte_ids = torch.randint(0, 256, (B, T, G), dtype=torch.long)
         __attention_mask = torch.ones(B, T, dtype=torch.long)
@@ -135,11 +135,11 @@ class TestInputsEmbedsSmoke:
         for __p in __model.parameters():
             __p.requires_grad_(False)
 
-        __prefix = deformers.layers.prefix.CompositeBytePrefix(
+        __prefix = deformers.models.prefix.CompositeBytePrefix(
             embed_dim=E,
+            output_dim=H,
             vocab_dim=256,
-            latent_dim=H,
-            group_dim=-1,)
+            patch_dim=-1,)
 
         __attention_mask = torch.ones(B, T, dtype=torch.long)
 
@@ -178,8 +178,8 @@ class TestInputsEmbedsSmoke:
         __model = __model.cuda()
         for __p in __model.parameters():
             __p.requires_grad_(False)
-        __prefix = deformers.layers.prefix.CompositeBytePrefix(
-            embed_dim=E, vocab_dim=256, latent_dim=H, group_dim=-1)
+        __prefix = deformers.models.prefix.CompositeBytePrefix(
+            embed_dim=E, output_dim=H, vocab_dim=256, patch_dim=-1)
         __byte_ids = torch.randint(0, 256, (B, T, G)).cuda()
         __attention_mask = torch.ones(B, T, dtype=torch.long).cuda()
         __embeds = __prefix(__byte_ids)
