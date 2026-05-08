@@ -94,8 +94,6 @@ by the trainer from configuration.
 
 The constructor accepts:
 - external objects: text tokenizer, byte tokenizer, teacher model, student model
-- base configuration dictionaries: batch, loss, gradient, training, logging,
-  optimizer, scheduler, scaler, saving, testing, ema, speed, tboard
 
 The constructor does not accept prebuilt optimizer, scheduler, scaler, context,
 or callback objects.
@@ -110,16 +108,15 @@ They are always recreated at the start of each phase to use phase-specific
 learning-rate schedules, log paths, and TensorBoard directories.
 
 Explicit setup methods:
-- `setup_state()` - (re)initialize the runtime state
 - `setup_optimizer()` - create AdamW from optimizer config
 - `setup_scaler()` - create GradScaler from scaler config
-- `setup_context()` - create autocast or nullcontext from training config
+- `setup_context()` - create autocast or nullcontext from global config
 - `setup_scheduler()` - create WaveLR from scheduler config
 - `setup_callbacks()` - create speed / ema / log / TensorBoard / save callbacks
 - `setup_global()` - call setup_optimizer, setup_scaler, setup_context
 - `setup_phase()` - store phase config, store dataset info, rebuild
   scheduler and callbacks
-- `validate_setup()` - assert readiness before running
+- `_check_setup()` - assert readiness before running
 
 ### Overwrite policy
 
