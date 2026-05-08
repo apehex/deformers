@@ -849,6 +849,11 @@ class TestSetupPhase:
         self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=5, column_str='text')
         assert __t._config['phase']['epoch_num'] == 5
 
+    def test_updates_state_epoch_total_from_phase_cfg(self):
+        __t = self._make_ready_trainer()
+        self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=5, column_str='text')
+        assert __t._state['scalars']['epoch/total'] == 5
+
     def test_updates_current_config_with_phase_config(self):
         __t = self._make_ready_trainer()
         self._setup_phase(
@@ -876,6 +881,19 @@ class TestSetupPhase:
             loss_cfg={'mse_0_rate': 1.0, 'mse_k_rate': 0.9, 'cos_0_rate': 0.0, 'cos_k_rate': 0.0})
         self._setup_phase(__t, dataset_obj=_FakeDataset([]), epoch_num=2, column_str='text')
         assert __t._config['loss']['mse_k_rate'] == 0.0
+
+    def test_batch_cfg_missing_batch_dim_is_ignored(self):
+        __t = self._make_ready_trainer()
+        __phase_cfg = {'column_str': 'text', 'epoch_num': 2}
+        __batch_cfg = {'sequence_dim': 4, 'patch_dim': 2, 'left_pad': True}
+        __t.setup_phase(
+            dataset_obj=_FakeDataset([]),
+            phase_cfg=__phase_cfg,
+            batch_cfg=__batch_cfg,
+            loss_cfg={'mse_0_rate': 1.0, 'mse_k_rate': 0.0, 'cos_0_rate': 0.0, 'cos_k_rate': 0.0},
+            gradient_cfg={'every_num': 1, 'max_norm': 1.0},
+        )
+        assert __t._config['batch'] == {}
 
     def test_creates_scheduler_when_cfg_provided(self):
         __t = self._make_ready_trainer()
