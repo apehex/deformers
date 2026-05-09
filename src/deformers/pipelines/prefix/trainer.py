@@ -549,7 +549,9 @@ class PrefixTrainer:
     # PROGRESS #################################################################
 
     def step_progress(self, pbar_obj: object) -> None:
-        # aggregate and format
-        __stats = _callbacks.format_state(state=self._state['scalars'])
-        # filter the epoch and step since they are already in the pbar
-        pbar_obj.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
+        # only work every few steps, after accumulating the loss on a few batches
+        if bool(self._state['scalars']['switch/grad']):
+            # aggregate and format
+            __stats = _callbacks.format_state(state=self._state['scalars'])
+            # filter the epoch and step since they are already in the pbar
+            pbar_obj.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
