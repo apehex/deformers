@@ -73,7 +73,7 @@ MAIN_CFG = {
     'logging_num': 32,
     'testing_num': 128,
     'checkpoint_num': 128,
-    'learning_rate': 5e-5,}
+    'learning_rate': 1e-4,}
 
 # DATA CONFIG ##################################################################
 
@@ -341,7 +341,7 @@ print('[phase 1] training on uniform vocabulary coverage...')
 TRAINER.run_phase()
 
 print('[phase 1] cleaning up...')
-TRAINER.cleanup_callbacks()
+TRAINER.close_callbacks()
 
 # PHASE 2: WIKIPEDIA TEXT FINE-TUNING ##########################################
 
@@ -364,7 +364,7 @@ print('[phase 2] training on Wikipedia...')
 TRAINER.run_phase()
 
 print('[phase 2] cleaning up...')
-TRAINER.cleanup_callbacks()
+TRAINER.close_callbacks()
 
 # DATAVIZ ######################################################################
 

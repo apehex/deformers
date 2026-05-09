@@ -14,11 +14,11 @@ Typical lifecycle:
     trainer.setup_global(context_cfg=..., optimizer_cfg=..., scaler_cfg=...)
     trainer.setup_phase(dataset, epoch_num, column, batch_cfg=..., loss_cfg=..., ...)
     trainer.run_phase()                     # runs all epochs
-    trainer.cleanup_callbacks()
+    trainer.close_callbacks()
 
     trainer.setup_phase(dataset2, epoch_num2, column2, batch_cfg=..., loss_cfg=..., ...)
     trainer.run_phase()
-    trainer.cleanup_callbacks()
+    trainer.close_callbacks()
 """
 
 import contextlib
@@ -541,7 +541,7 @@ class PrefixTrainer:
             if __callback['trigger'](self._state['scalars']):
                 __callback['operation'](self._state['scalars'])
 
-    def cleanup_callbacks(self) -> None:
+    def close_callbacks(self) -> None:
         """Run cleanup on all registered callbacks."""
         for __callback in self._callbacks:
             __callback['cleanup']()
