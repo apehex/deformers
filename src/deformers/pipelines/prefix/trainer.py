@@ -354,10 +354,10 @@ class PrefixTrainer:
             self.init_step(step_num=__step)
             # vectorize => forward => loss => backward => update => callbacks => reset
             self.run_step(batch_arr=__batch, column_str=column_str)
-            # reset the loss and free the memory
-            self.close_step()
             # format and display the main stats
             self.step_progress(__pbar)
+            # reset the loss and free the memory
+            self.close_step()
         # terminate the progress bar
         self.close_epoch(__pbar)
 
