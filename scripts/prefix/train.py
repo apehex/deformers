@@ -49,6 +49,7 @@ import transformers
 
 import mlable.models
 
+import deformers.datasets.generic
 import deformers.datasets.random
 import deformers.models.generic
 import deformers.models.prefix
@@ -93,6 +94,8 @@ BATCH_CFG = {
     'batch_dim': MAIN_CFG['batch_dim'],
     'sequence_dim': MAIN_CFG['sequence_dim'],
     'patch_dim': MAIN_CFG['patch_dim'],
+    'device_str': MAIN_CFG['device_str'],
+    'dtype_obj': torch.long,
     'padding_str': '',
     'left_pad': True,}
 
@@ -137,8 +140,8 @@ PREFIX_CFG = {
 
 # TRAINING UTILITIES CONFIG (shared across phases) #############################
 
-TRAINING_CFG = {
-    'dtype': torch.long,
+CONTEXT_CFG = {
+    'dtype': MAIN_CFG['dtype_obj'],
     'device': MAIN_CFG['device_str'],}
 
 OPTIMIZER_CFG = {
@@ -244,12 +247,14 @@ DATASETS = {'wikipedia': datasets.load_dataset(**DATASET_CFG['wikipedia']),}
 print('[init] building a random dataset...')
 DATASETS['random'] = deformers.datasets.random.build_uniform_dataset(**DATASET_CFG['random'])
 
+print('[init] preprocessing the main dataset...')
+DATASETS['wikipedia'] = deformers.datasets.generic.BatchedDataset(
+    dataset_obj=DATASETS['wikipedia'].select_columns(['text']),
+    batch_dim=BATCH_CFG['batch_dim'])
+
 print('[init] calculating the metadata...')
 RANDOM_DIM = len(DATASETS['random'])
-WIKI_DIM = len(DATASETS['wikipedia']) // BATCH_CFG['batch_dim']
-
-print('[init] preprocessing the main dataset...')
-DATASETS['wikipedia'] = DATASETS['wikipedia'].select_columns(['text']).iter(batch_size=BATCH_CFG['batch_dim'])
+WIKI_DIM = len(DATASETS['wikipedia'])
 
 # MODELS #######################################################################
 
@@ -311,7 +316,7 @@ TRAINER = deformers.pipelines.prefix.trainer.PrefixTrainer(
 
 print('[init] setting up long-lived utilities (optimizer / scaler / context)...')
 TRAINER.setup_global(
-    global_cfg=TRAINING_CFG,
+    context_cfg=CONTEXT_CFG,
     optimizer_cfg=OPTIMIZER_CFG,
     scaler_cfg=SCALER_CFG,)
 
