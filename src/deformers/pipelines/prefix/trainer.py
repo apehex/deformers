@@ -11,7 +11,7 @@ Stateless transforms such as vectorization and loss computation remain in
 
 Typical lifecycle:
     trainer = PrefixTrainer(text_tok, byte_tok, teacher, student)
-    trainer.setup_global(global_cfg=..., optimizer_cfg=..., scaler_cfg=...)
+    trainer.setup_global(context_cfg=..., optimizer_cfg=..., scaler_cfg=...)
     trainer.setup_phase(dataset, epoch_num, column, batch_cfg=..., loss_cfg=..., ...)
     trainer.run_phase()                     # runs all epochs
     trainer.cleanup_callbacks()
@@ -96,7 +96,7 @@ class PrefixTrainer:
 
     def init_config(self) -> dict[str, dict]:
         return {
-            'global': {}, # dtype and device
+            'context': {}, # dtype and device
             'optimizer': {}, # global level
             'scaler': {}, # global level
             'phase': {}, # phase level
@@ -159,18 +159,18 @@ class PrefixTrainer:
 
     # GLOBAL ###################################################################
 
-    def setup_context(self, global_cfg: dict={}) -> None:
+    def setup_context(self, context_cfg: dict={}) -> None:
         """Create the autocast context from training config."""
-        if self._check_config(global_cfg, ('device', 'dtype')):
+        if self._check_config(context_cfg, ('device', 'dtype')):
             # save the configuration for import / export
-            self._config['global'] = global_cfg
+            self._config['context'] = context_cfg
             # default to a no-op context
             self._context = contextlib.nullcontext()
             # use mixed precision otherwise
-            __dtype = global_cfg.get('dtype', torch.float32)
+            __dtype = context_cfg.get('dtype', torch.float32)
             if __dtype != torch.float32:
                 self._context = torch.amp.autocast(
-                    device_type=global_cfg.get('device', 'cpu'),
+                    device_type=context_cfg.get('device', 'cpu'),
                     dtype=__dtype)
 
     def setup_optimizer(self, optimizer_cfg: dict={}) -> None:
@@ -193,7 +193,7 @@ class PrefixTrainer:
 
     def setup_global(
         self,
-        global_cfg: dict={},
+        context_cfg: dict={},
         optimizer_cfg: dict={},
         scaler_cfg: dict={},
         overwrite_opt: bool=False,
@@ -201,7 +201,7 @@ class PrefixTrainer:
         """Initialize long-lived utilities: optimizer, scaler, and mixed-precision context."""
         if overwrite_opt or self._context is None:
             self._context = None
-            self.setup_context(global_cfg=global_cfg)
+            self.setup_context(context_cfg=context_cfg)
         if overwrite_opt or self._optimizer is None:
             self._optimizer = None
             self.setup_optimizer(optimizer_cfg=optimizer_cfg)
@@ -419,8 +419,8 @@ class PrefixTrainer:
         __args = {
             'text_tok': self._text_tok,
             'byte_tok': self._byte_tok,
-            'dtype_obj': self._config['global'].get('dtype', torch.long),
-            'device_str': self._config['global'].get('device', 'cpu'),
+            'dtype_obj': self._config['batch'].get('dtype_obj', torch.long),
+            'device_str': self._config['batch'].get('device_str', 'cpu'),
             'sequence_dim': int(self._config['batch']['sequence_dim']),
             'patch_dim': int(self._config['batch']['patch_dim']),
             'left_pad': bool(self._config['batch'].get('left_pad', True)),}

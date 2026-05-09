@@ -745,7 +745,7 @@ class TestSetupGlobal:
 
     def _setup_global(self, trainer: _trainer.PrefixTrainer, overwrite_opt: bool = False) -> None:
         trainer.setup_global(
-            global_cfg={'dtype': torch.float32, 'device': 'cpu'},
+            context_cfg={'dtype': torch.float32, 'device': 'cpu'},
             optimizer_cfg={'lr': 1e-3},
             scaler_cfg={'enabled': False},
             overwrite_opt=overwrite_opt)
@@ -828,7 +828,7 @@ class TestSetupPhase:
             teacher_mod=unittest.mock.MagicMock(),
             student_mod=__student,)
         __t.setup_global(
-            global_cfg={'dtype': torch.float32, 'device': 'cpu'},
+            context_cfg={'dtype': torch.float32, 'device': 'cpu'},
             optimizer_cfg={'lr': 1e-3},
             scaler_cfg={'enabled': False},)
         return __t
