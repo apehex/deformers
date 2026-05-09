@@ -241,14 +241,15 @@ TEXT_TOK.pad_token = TEXT_TOK.eos_token if not bool(TEXT_TOK.pad_token) else TEX
 print('[init] downloading the main dataset...')
 DATASETS = {'wikipedia': datasets.load_dataset(**DATASET_CFG['wikipedia']),}
 
-print('[init] preprocessing the main dataset...')
-DATASETS['wikipedia'] = DATASETS['wikipedia'].select_columns(['text']).iter(batch_size=BATCH_CFG['batch_dim'])
-
 print('[init] building a random dataset...')
 DATASETS['random'] = deformers.datasets.random.build_uniform_dataset(**DATASET_CFG['random'])
 
+print('[init] calculating the metadata...')
 RANDOM_DIM = len(DATASETS['random'])
-WIKI_DIM = len(DATASETS['wikipedia'])
+WIKI_DIM = len(DATASETS['wikipedia']) // BATCH_CFG['batch_dim']
+
+print('[init] preprocessing the main dataset...')
+DATASETS['wikipedia'] = DATASETS['wikipedia'].select_columns(['text']).iter(batch_size=BATCH_CFG['batch_dim'])
 
 # MODELS #######################################################################
 
@@ -298,8 +299,8 @@ print(PREFIX_MOD)
 # TRAINER ######################################################################
 
 print('[init] calibrating scheduler step counts...')
-PHASE1_CFG['scheduler']['total_num'] = max(1, (PHASE1_CFG['epoch_num'] * RANDOM_DIM) // GRADIENT_CFG['every_num'])
-PHASE2_CFG['scheduler']['total_num'] = max(1, (PHASE2_CFG['epoch_num'] * WIKI_DIM) // GRADIENT_CFG['every_num'])
+PHASE1_CFG['scheduler']['total_num'] = max(1, (PHASE1_CFG['phase']['epoch_num'] * RANDOM_DIM) // GRADIENT_CFG['every_num'])
+PHASE2_CFG['scheduler']['total_num'] = max(1, (PHASE2_CFG['phase']['epoch_num'] * WIKI_DIM) // GRADIENT_CFG['every_num'])
 
 print('[init] building trainer...')
 TRAINER = deformers.pipelines.prefix.trainer.PrefixTrainer(
@@ -319,7 +320,7 @@ TRAINER.setup_global(
 print('[phase 1] configuring phase...')
 TRAINER.setup_phase(
     dataset_obj=DATASETS['random'],
-    phase_cfg=PHASE1_CFG,
+    phase_cfg=PHASE1_CFG['phase'],
     batch_cfg=BATCH_CFG,
     loss_cfg={**LOSS_CFG, **PHASE1_CFG.get('loss', {})},
     gradient_cfg=GRADIENT_CFG,
@@ -342,7 +343,7 @@ TRAINER.cleanup_callbacks()
 print('[phase 2] configuring phase...')
 TRAINER.setup_phase(
     dataset_obj=DATASETS['wikipedia'],
-    phase_cfg=PHASE2_CFG,
+    phase_cfg=PHASE2_CFG['phase'],
     batch_cfg=BATCH_CFG,
     loss_cfg={**LOSS_CFG, **PHASE2_CFG.get('loss', {})},
     gradient_cfg=GRADIENT_CFG,
