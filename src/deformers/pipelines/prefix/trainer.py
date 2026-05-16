@@ -466,6 +466,9 @@ class BaseRunner:
             (float(self._config['loss'].get('mse_k_rate', 0.0)) > 0.0)
             or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0))
 
+    def _grad_context(self, gradient_opt: bool) -> object:
+        return contextlib.nullcontext() if bool(gradient_opt) else torch.no_grad()
+
     def _teacher_forward(
         self,
         hidden_opt: bool,
@@ -473,24 +476,7 @@ class BaseRunner:
     ) -> None:
         """Teacher forward path with explicit gradient mode."""
         with self._context:
-            if not gradient_opt:
-                with torch.no_grad():
-                    # teacher forward: get original embeddings and hidden states (no grad)
-                    self._state['tensors']['outputs/teacher/0'] = _processors.embed(
-                        indices_arr=self._state['tensors']['inputs/indices'],
-                        model_obj=self._teacher)
-                    # do not compute the hidden activations by default
-                    self._state['tensors']['outputs/teacher/k'] = torch.zeros(
-                        tuple(self._state['tensors']['outputs/teacher/0'].shape),
-                        dtype=self._state['tensors']['outputs/teacher/0'].dtype,
-                        device=self._state['tensors']['outputs/teacher/0'].device)
-                    # compute the hidden activations only if they are used in the loss
-                    if hidden_opt:
-                        self._state['tensors']['outputs/teacher/k'] = _processors.forward(
-                            embeds_arr=self._state['tensors']['outputs/teacher/0'],
-                            mask_arr=self._state['tensors']['inputs/mask'],
-                            model_obj=self._teacher)
-            else:
+            with self._grad_context(gradient_opt=gradient_opt):
                 # teacher forward: get original embeddings and hidden states (no grad)
                 self._state['tensors']['outputs/teacher/0'] = _processors.embed(
                     indices_arr=self._state['tensors']['inputs/indices'],
@@ -514,21 +500,7 @@ class BaseRunner:
     ) -> None:
         """Student forward path with explicit gradient mode."""
         with self._context:
-            if not gradient_opt:
-                with torch.no_grad():
-                    self._state['tensors']['outputs/student/0'] = self._student(
-                        self._state['tensors']['inputs/bytes']
-                    ).to(dtype=self._state['tensors']['outputs/teacher/0'].dtype)
-                    self._state['tensors']['outputs/student/k'] = torch.zeros(
-                        tuple(self._state['tensors']['outputs/student/0'].shape),
-                        dtype=self._state['tensors']['outputs/student/0'].dtype,
-                        device=self._state['tensors']['outputs/student/0'].device)
-                    if hidden_opt:
-                        self._state['tensors']['outputs/student/k'] = _processors.forward(
-                            embeds_arr=self._state['tensors']['outputs/student/0'],
-                            mask_arr=self._state['tensors']['inputs/mask'],
-                            model_obj=self._teacher)
-            else:
+            with self._grad_context(gradient_opt=gradient_opt):
                 self._state['tensors']['outputs/student/0'] = self._student(
                     self._state['tensors']['inputs/bytes']
                 ).to(dtype=self._state['tensors']['outputs/teacher/0'].dtype)
@@ -543,7 +515,7 @@ class BaseRunner:
                         model_obj=self._teacher)
 
     def step_forward(self) -> None:
-        raise NotImplementedError('step_forward() must be implemented by concrete runner classes.')
+        raise NotImplementedError('Subclasses of BaseRunner must implement step_forward().')
 
     # LOSS #####################################################################
 

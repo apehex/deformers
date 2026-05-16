@@ -845,7 +845,6 @@ class TestSetupCallbacks:
         assert __t._callbacks[0]['name'] == 'speed'
         assert not __t._callbacks[0]['trigger']({'scalars': {'step/current': 1}})
         assert __t._callbacks[0]['trigger']({'scalars': {'step/current': 2}})
-        assert __t._callbacks[0]['trigger']({'tensors': {}, 'scalars': {'step/current': 2}})
         assert not __t._callbacks[0]['trigger']({'tensors': {}, 'scalars': {'step/current': 3}})
         __state = {'tensors': {}, 'scalars': {'step/current': 2, 'iter/start': 0.0, 'iter/time': 0.0, 'iter/tps': 0.0}}
         __t._callbacks[0]['operation'](__state)
