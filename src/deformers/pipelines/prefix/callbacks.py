@@ -29,7 +29,8 @@ def get_scalars(state: dict) -> dict:
     assert isinstance(state, dict), 'callback state must be a dict'
     if 'scalars' in state:
         return state['scalars']
-    assert not any(__key in state for __key in ['tensors', 'metadata']), 'malformed runner state: missing `scalars`'
+    if any(__key in state for __key in ['tensors', 'metadata']):
+        raise KeyError('malformed runner state: expected a top-level `scalars` key')
     return state
 
 # FORMAT #######################################################################

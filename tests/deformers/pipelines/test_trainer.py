@@ -220,9 +220,10 @@ class TestPrefixTrainerBehavior:
 
         assert trainer._state['tensors']['outputs/student/0'].requires_grad
         assert trainer._state['tensors']['outputs/student/k'].shape == trainer._state['tensors']['outputs/student/0'].shape
-        assert torch.equal(
+        assert not torch.equal(
             trainer._state['tensors']['outputs/student/k'],
-            trainer._state['tensors']['outputs/student/0'] + 1.0)
+            trainer._state['tensors']['outputs/student/0'])
+        assert torch.equal(trainer._state['tensors']['outputs/student/k'], trainer._state['tensors']['outputs/student/0'] + 1.0)
 
     def test_step_update_runs_backward_and_optimizer(self):
         trainer = _configure_trainer(_make_prefix_trainer())

@@ -37,11 +37,7 @@ import deformers.pipelines.prefix.processors as _processors
 # GENERIC ######################################################################
 
 def is_iterable(data: object) -> bool:
-    try:
-        data[0]
-    except (IndexError, KeyError, TypeError):
-        return False
-    return True
+    return hasattr(data, '__getitem__')
 
 
 def is_text(data: object) -> bool:
@@ -174,7 +170,7 @@ class BaseRunner:
         overwrite_opt: bool=False,
     ) -> None:
         # keep the shared signature aligned with PrefixTrainer.setup_global()
-        _ = optimizer_cfg, scaler_cfg
+        del optimizer_cfg, scaler_cfg
         if overwrite_opt or self._context is None:
             self._context = None
             self.setup_context(context_cfg=context_cfg)
@@ -251,6 +247,7 @@ class BaseRunner:
         tboard_cfg: dict=None,
         saving_cfg: dict=None,
     ) -> None:
+        # keep the shared signature aligned with PrefixTrainer.setup_phase()
         del scheduler_cfg
         self._dataset = dataset_obj
         self.setup_configs(
