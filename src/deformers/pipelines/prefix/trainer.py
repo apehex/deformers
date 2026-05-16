@@ -37,6 +37,7 @@ import deformers.pipelines.prefix.processors as _processors
 # GENERIC ######################################################################
 
 def is_iterable(data: object) -> bool:
+    """Treat indexable batch-like inputs as iterable for prefix preprocessing."""
     try:
         data[0]
     except (IndexError, KeyError, TypeError):

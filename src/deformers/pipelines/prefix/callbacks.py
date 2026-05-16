@@ -25,12 +25,12 @@ def is_callback(callback: dict) -> bool:
         and callable(callback['cleanup']))
 
 def get_scalars(state: dict) -> dict:
-    """Accept either the full runner state or the scalar subset."""
+    """Return the scalar mapping from either a full runner state or a scalar-only dict."""
     assert isinstance(state, dict), 'callback state must be a dict'
     if 'scalars' in state:
         return state['scalars']
     if any(__key in state for __key in ['tensors', 'metadata']):
-        raise KeyError('malformed runner state: `scalars` key is required when `tensors` or `metadata` are present')
+        raise KeyError(f'malformed runner state: found keys {sorted(state.keys())} but `scalars` is required when `tensors` or `metadata` are present')
     return state
 
 # FORMAT #######################################################################
