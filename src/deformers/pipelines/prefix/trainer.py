@@ -173,7 +173,8 @@ class BaseRunner:
         scaler_cfg: dict=None,
         overwrite_opt: bool=False,
     ) -> None:
-        del optimizer_cfg, scaler_cfg
+        # keep the shared signature aligned with PrefixTrainer.setup_global()
+        _ = optimizer_cfg, scaler_cfg
         if overwrite_opt or self._context is None:
             self._context = None
             self.setup_context(context_cfg=context_cfg)

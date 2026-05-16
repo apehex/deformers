@@ -26,7 +26,11 @@ def is_callback(callback: dict) -> bool:
 
 def get_scalars(state: dict) -> dict:
     """Accept either the full runner state or the scalar subset."""
-    return state.get('scalars', state)
+    assert isinstance(state, dict), 'callback state must be a dict'
+    if 'scalars' in state:
+        return state['scalars']
+    assert not any(__key in state for __key in ['tensors', 'metadata']), 'malformed runner state: missing `scalars`'
+    return state
 
 # FORMAT #######################################################################
 

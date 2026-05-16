@@ -97,7 +97,7 @@ def _patch_forward(monkeypatch) -> None:
         lambda **kwargs: kwargs['embeds_arr'] + 1.0)
 
 
-def _configure_base_runner(runner: _trainer.BaseRunner, dataset_obj: object=None, testing_cfg: dict=None) -> _trainer.BaseRunner:
+def _configure_base_runner(runner: _trainer.BaseRunner, dataset_obj: _FakeDataset | None=None, testing_cfg: dict=None) -> _trainer.BaseRunner:
     runner.setup_global(context_cfg=GLOBAL_CFG)
     runner.setup_phase(
         dataset_obj=_make_dataset() if dataset_obj is None else dataset_obj,
@@ -109,7 +109,7 @@ def _configure_base_runner(runner: _trainer.BaseRunner, dataset_obj: object=None
     return runner
 
 
-def _configure_trainer(trainer: _trainer.PrefixTrainer, dataset_obj: object=None) -> _trainer.PrefixTrainer:
+def _configure_trainer(trainer: _trainer.PrefixTrainer, dataset_obj: _FakeDataset | None=None) -> _trainer.PrefixTrainer:
     trainer.setup_global(
         context_cfg=GLOBAL_CFG,
         optimizer_cfg={'lr': 1e-3},
