@@ -400,7 +400,7 @@ class BaseRunner:
     def close_step(self) -> None:
         """Reset the state after updating the weights."""
         if self._should_close_step():
-            # only reset after a weight update, because the mini batch losses accumulate accross steps
+            # reset transient tensors and accumulated scalar losses for the current step window
             self._state['tensors'] = {}
             self._state['scalars']['loss/total'] = 0.0
             self._state['scalars']['loss/mse/0'] = 0.0
@@ -411,7 +411,7 @@ class BaseRunner:
             mlable.models.free_memory()
 
     def _should_close_step(self) -> bool:
-        """Hook controlling when transient step state is reset."""
+        """Hook controlling when `tensors` and accumulated `loss/*` scalars are reset."""
         return bool(self._state['scalars']['switch/grad'])
 
     # VECTORIZE ################################################################
@@ -441,14 +441,19 @@ class BaseRunner:
 
     # FORWARD ##################################################################
 
-    def _step_forward_impl(self, student_grad_opt: bool=True) -> None:
+    def _step_forward_impl(
+        self,
+        enable_student_grad: bool = True,
+        use_teacher_no_grad: bool = True,
+    ) -> None:
         """Shared forward pass implementation for teacher/student paths."""
         __hidden = (
             (float(self._config['loss'].get('mse_k_rate', 0.0)) > 0.0)
             or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0))
         # mixed precision context
         with self._context:
-            with torch.no_grad():
+            __teacher_ctx = torch.no_grad() if use_teacher_no_grad else contextlib.nullcontext()
+            with __teacher_ctx:
                 # teacher forward: get original embeddings and hidden states (no grad)
                 self._state['tensors']['outputs/teacher/0'] = _processors.embed(
                     indices_arr=self._state['tensors']['inputs/indices'],
@@ -465,7 +470,7 @@ class BaseRunner:
                         mask_arr=self._state['tensors']['inputs/mask'],
                         model_obj=self._teacher)
             # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
-            __student_ctx = contextlib.nullcontext() if student_grad_opt else torch.no_grad()
+            __student_ctx = contextlib.nullcontext() if enable_student_grad else torch.no_grad()
             with __student_ctx:
                 self._state['tensors']['outputs/student/0'] = self._student(
                     self._state['tensors']['inputs/bytes']
@@ -484,7 +489,7 @@ class BaseRunner:
 
     def step_forward(self) -> None:
         """Run teacher and student forwards for the current batch."""
-        self._step_forward_impl(student_grad_opt=True)
+        self._step_forward_impl(enable_student_grad=True, use_teacher_no_grad=True)
 
     # LOSS #####################################################################
 
@@ -512,7 +517,7 @@ class BaseRunner:
         self._state['scalars']['loss/total'] += float(__outputs[4].item())
 
     def step_objective(self) -> None:
-        """Default objective path used by testing-oriented runners."""
+        """Base objective implementation that computes/accumulates losses without backward."""
         self.step_losses()
 
     # BACKWARD #################################################################
@@ -594,13 +599,13 @@ class PrefixTester(BaseRunner):
     """Prefix runner for evaluation/benchmark phases without parameter updates."""
 
     def init_step(self, step_num: int) -> None:
+        """Initialize each step in evaluation mode (no train/no grad updates)."""
         super().init_step(step_num=step_num)
         self._state['scalars']['switch/train'] = 0
         self._state['scalars']['switch/grad'] = 0
 
     def step_forward(self) -> None:
-        with torch.no_grad():
-            self._step_forward_impl(student_grad_opt=False)
+        self._step_forward_impl(enable_student_grad=False, use_teacher_no_grad=True)
 
     def _should_close_step(self) -> bool:
         return True

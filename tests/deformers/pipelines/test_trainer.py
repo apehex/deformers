@@ -452,7 +452,7 @@ class TestPrefixTesterStepForward:
 
 class TestPrefixTesterObjective:
 
-    def test_runs_metrics_without_backward_or_optimizer(self):
+    def test_calls_step_losses_only(self):
         __t = _make_tester()
         __t.step_losses = unittest.mock.MagicMock()
         __t.step_backward = unittest.mock.MagicMock()
@@ -825,6 +825,17 @@ class TestSetupCallbacks:
         assert __t._callbacks[0]['name'] == 'speed'
         assert not __t._callbacks[0]['trigger']({'scalars': {'step/current': 1}})
         assert __t._callbacks[0]['trigger']({'scalars': {'step/current': 2}})
+        assert __t._callbacks[0]['trigger']({'tensors': {}, 'scalars': {'step/current': 2}})
+        assert not __t._callbacks[0]['trigger']({'tensors': {}, 'scalars': {'step/current': 3}})
+        __state = {'tensors': {}, 'scalars': {'step/current': 2, 'iter/start': 0.0, 'iter/time': 0.0, 'iter/tps': 0.0}}
+        __t._callbacks[0]['operation'](__state)
+        assert __state['scalars']['iter/time'] >= 0.0
+
+    def test_trigger_raises_for_missing_scalars(self):
+        __t = self._make_base_trainer()
+        __t.setup_callbacks(speed_cfg={'every_num': 2, 'batch_len': 3})
+        with pytest.raises(KeyError):
+            __t._callbacks[0]['trigger']({'tensors': {}})
 
 
 class TestCallbackStateContract:
@@ -842,21 +853,35 @@ class TestCallbackStateContract:
         assert __t._state['scalars']['loss/ema'] == 123.0
 
 
-class TestBaseRunnerLifecycle:
+class TestRunnerLifecycle:
 
     def test_run_step_uses_shared_step_flow(self):
-        __runner = _trainer.BaseRunner(
-            text_tok=unittest.mock.MagicMock(),
-            byte_tok=unittest.mock.MagicMock(),
-            teacher_mod=unittest.mock.MagicMock(),
-            student_mod=unittest.mock.MagicMock(),)
+        __runner = _make_tester()
         __calls = []
-        __runner.step_batch = lambda batch_arr, column_str: __calls.append('batch')
-        __runner.step_forward = lambda: __calls.append('forward')
-        __runner.step_objective = lambda: __calls.append('objective')
-        __runner.step_callbacks = lambda: __calls.append('callbacks')
-        __runner.run_step(batch_arr={'text': ['x']}, column_str='text')
+        __step_args = {}
+
+        def __step_batch(batch_arr, column_str):
+            __calls.append('batch')
+            __step_args['batch_arr'] = batch_arr
+            __step_args['column_str'] = column_str
+
+        def __step_forward():
+            __calls.append('forward')
+
+        def __step_objective():
+            __calls.append('objective')
+
+        def __step_callbacks():
+            __calls.append('callbacks')
+
+        __runner.step_batch = __step_batch
+        __runner.step_forward = __step_forward
+        __runner.step_objective = __step_objective
+        __runner.step_callbacks = __step_callbacks
+        __batch = {'text': ['x']}
+        __runner.run_step(batch_arr=__batch, column_str='text')
         assert __calls == ['batch', 'forward', 'objective', 'callbacks']
+        assert __step_args == {'batch_arr': __batch, 'column_str': 'text'}
 
 
 
