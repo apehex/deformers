@@ -126,6 +126,30 @@ def _make_trainer(
     return __t
 
 
+def _make_tester(
+    epoch_num: int = 2,
+    grad_every: int = 1,
+    log_every: int = 0,
+    save_every: int = 0,
+    test_every: int = 0,
+) -> _trainer.PrefixTester:
+    cfg = _make_config(
+        epoch_num=epoch_num,
+        grad_every=grad_every,
+        log_every=log_every,
+        save_every=save_every,
+        test_every=test_every)
+
+    __t = _trainer.PrefixTester(
+        text_tok=unittest.mock.MagicMock(),
+        byte_tok=unittest.mock.MagicMock(),
+        teacher_mod=unittest.mock.MagicMock(),
+        student_mod=unittest.mock.MagicMock(),)
+    __t._config = {__k: dict(__v) for (__k, __v) in cfg.items()}
+    __t._context = contextlib.nullcontext()
+    return __t
+
+
 # INIT_STATE ###################################################################
 
 class TestInitState:
@@ -400,6 +424,45 @@ class TestStepForward:
         assert torch.all(__tk == 0)
 
 
+class TestPrefixTesterStepForward:
+
+    def test_runs_under_no_grad(self, monkeypatch):
+        __t = _make_tester()
+        __t._config['loss'].update({'mse_k_rate': 0.0, 'cos_k_rate': 0.0})
+        __t._state['tensors']['inputs/mask'] = torch.ones(2, 4)
+        __t._state['tensors']['inputs/indices'] = torch.zeros(2, 4, dtype=torch.long)
+        __t._state['tensors']['inputs/bytes'] = torch.zeros(2, 4, 2, dtype=torch.long)
+
+        monkeypatch.setattr(
+            'deformers.pipelines.prefix.processors.embed',
+            lambda **kwargs: torch.randn(2, 4, 8))
+        monkeypatch.setattr(
+            'deformers.pipelines.prefix.processors.forward',
+            lambda **kwargs: torch.randn(2, 4, 8))
+
+        __grad_enabled = []
+        def __student(inputs):
+            __grad_enabled.append(torch.is_grad_enabled())
+            return torch.randn(2, 4, 8)
+        __t._student = __student
+
+        __t.step_forward()
+        assert __grad_enabled == [False]
+
+
+class TestPrefixTesterObjective:
+
+    def test_runs_metrics_without_backward_or_optimizer(self):
+        __t = _make_tester()
+        __t.step_losses = unittest.mock.MagicMock()
+        __t.step_backward = unittest.mock.MagicMock()
+        __t.step_optimizer = unittest.mock.MagicMock()
+        __t.step_objective()
+        __t.step_losses.assert_called_once()
+        __t.step_backward.assert_not_called()
+        __t.step_optimizer.assert_not_called()
+
+
 # STEP_LOSSES ##################################################################
 
 class TestStepLosses:
@@ -517,6 +580,31 @@ class TestStepOptimizer:
         __t._scheduler = None
         # should not raise
         __t.step_optimizer()
+
+
+class TestPrefixTrainerObjective:
+
+    def test_skips_backward_and_optimizer_when_train_switch_off(self):
+        __t = _make_trainer()
+        __t.step_losses = unittest.mock.MagicMock()
+        __t.step_backward = unittest.mock.MagicMock()
+        __t.step_optimizer = unittest.mock.MagicMock()
+        __t._state['scalars']['switch/train'] = 0
+        __t.step_objective()
+        __t.step_losses.assert_called_once()
+        __t.step_backward.assert_not_called()
+        __t.step_optimizer.assert_not_called()
+
+    def test_runs_backward_and_optimizer_when_train_switch_on(self):
+        __t = _make_trainer()
+        __t.step_losses = unittest.mock.MagicMock()
+        __t.step_backward = unittest.mock.MagicMock()
+        __t.step_optimizer = unittest.mock.MagicMock()
+        __t._state['scalars']['switch/train'] = 1
+        __t.step_objective()
+        __t.step_losses.assert_called_once()
+        __t.step_backward.assert_called_once()
+        __t.step_optimizer.assert_called_once()
 
 
 # CLOSE_STEP ###################################################################
@@ -735,8 +823,41 @@ class TestSetupCallbacks:
         __t.setup_callbacks(speed_cfg={'every_num': 2, 'batch_len': 3})
         assert len(__t._callbacks) == 1
         assert __t._callbacks[0]['name'] == 'speed'
-        assert not __t._callbacks[0]['trigger']({'step/current': 1})
-        assert __t._callbacks[0]['trigger']({'step/current': 2})
+        assert not __t._callbacks[0]['trigger']({'scalars': {'step/current': 1}})
+        assert __t._callbacks[0]['trigger']({'scalars': {'step/current': 2}})
+
+
+class TestCallbackStateContract:
+
+    def test_callbacks_receive_full_state(self):
+        __t = _make_trainer()
+        __seen = []
+        __t._callbacks = [{
+            'name': 'test',
+            'trigger': lambda state: (__seen.append(state) or True),
+            'operation': lambda state: state['scalars'].__setitem__('loss/ema', 123.0),
+            'cleanup': lambda: None,}]
+        __t.step_callbacks()
+        assert __seen[0] is __t._state
+        assert __t._state['scalars']['loss/ema'] == 123.0
+
+
+class TestBaseRunnerLifecycle:
+
+    def test_run_step_uses_shared_step_flow(self):
+        __runner = _trainer.BaseRunner(
+            text_tok=unittest.mock.MagicMock(),
+            byte_tok=unittest.mock.MagicMock(),
+            teacher_mod=unittest.mock.MagicMock(),
+            student_mod=unittest.mock.MagicMock(),)
+        __calls = []
+        __runner.step_batch = lambda batch_arr, column_str: __calls.append('batch')
+        __runner.step_forward = lambda: __calls.append('forward')
+        __runner.step_objective = lambda: __calls.append('objective')
+        __runner.step_callbacks = lambda: __calls.append('callbacks')
+        __runner.run_step(batch_arr={'text': ['x']}, column_str='text')
+        assert __calls == ['batch', 'forward', 'objective', 'callbacks']
+
 
 
 # SETUP_GLOBAL #################################################################

@@ -88,11 +88,15 @@ Current implementation reference:
 - `CompositeBytePrefix` in `src/deformers/models/prefix.py`
 - block stack built from `ByteTransformer` layers with attention on byte axis `G`
 
-## Trainer Lifecycle Design
+## Runner Lifecycle Design
 
-The `PrefixTrainer` follows a lifecycle-oriented API where models and tokenizers
-are external constructor arguments and training utilities are owned and set up
-by the trainer from configuration.
+The prefix pipeline now uses a shared runner architecture:
+- `BaseRunner` for shared lifecycle/state/loop orchestration
+- `PrefixTrainer` for gradient-based optimization behavior
+- `PrefixTester` for evaluation/benchmark behavior without updates
+
+Models and tokenizers are still external constructor arguments, while runner
+utilities are owned and set up from configuration.
 
 ### Constructor ownership
 
@@ -121,6 +125,12 @@ Explicit setup methods:
 - `setup_phase()` - store phase config, store dataset info, rebuild
   scheduler and callbacks
 - `_check_setup()` - assert readiness before running
+
+Forward-path behavior:
+- `PrefixTrainer.step_forward()` runs teacher under `torch.no_grad()` and student
+  under mixed-precision context.
+- `PrefixTester.step_forward()` runs the full forward path under `torch.no_grad()`
+  (teacher + student), with no backward/optimizer updates.
 
 ### Overwrite policy
 

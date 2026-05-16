@@ -62,8 +62,8 @@ def is_text(data: object) -> bool:
 
 # TRAINER ######################################################################
 
-class PrefixTrainer:
-    """Thin orchestration class for the prefix training phases."""
+class BaseRunner:
+    """Shared orchestration class for prefix training / testing phases."""
 
     # INIT #####################################################################
 
@@ -152,10 +152,12 @@ class PrefixTrainer:
     def _check_setup(self) -> None:
         """Raise AssertionError if the trainer is not ready to run a phase."""
         assert self._context is not None, 'context is None; call setup_global() first.'
-        assert self._optimizer is not None, 'optimizer is None; call setup_global() first.'
-        assert self._scaler is not None, 'scaler is None; call setup_global() first.'
-        assert self._scheduler is not None, 'scheduler is None; call setup_phase() first.'
         assert self._dataset is not None, 'dataset is None; call setup_phase() first.'
+        self._check_runtime_setup()
+
+    def _check_runtime_setup(self) -> None:
+        """Hook for mode-specific setup checks."""
+        pass
 
     # GLOBAL ###################################################################
 
@@ -389,17 +391,15 @@ class PrefixTrainer:
         batch_arr: object,
         column_str: str,
     ) -> None:
-        """Run one training step."""
+        """Run one training/testing step."""
         self.step_batch(batch_arr=batch_arr, column_str=column_str)
         self.step_forward()
-        self.step_losses()
-        self.step_backward()
-        self.step_optimizer()
+        self.step_objective()
         self.step_callbacks()
 
     def close_step(self) -> None:
         """Reset the state after updating the weights."""
-        if bool(self._state['scalars']['switch/grad']):
+        if self._should_close_step():
             # only reset after a weight update, because the mini batch losses accumulate accross steps
             self._state['tensors'] = {}
             self._state['scalars']['loss/total'] = 0.0
@@ -409,6 +409,10 @@ class PrefixTrainer:
             self._state['scalars']['loss/cos/k'] = 0.0
             # garbage collection
             mlable.models.free_memory()
+
+    def _should_close_step(self) -> bool:
+        """Hook controlling when transient step state is reset."""
+        return bool(self._state['scalars']['switch/grad'])
 
     # VECTORIZE ################################################################
 
@@ -437,8 +441,8 @@ class PrefixTrainer:
 
     # FORWARD ##################################################################
 
-    def step_forward(self) -> None:
-        """Run teacher and student forwards for the current batch."""
+    def _step_forward_impl(self, student_grad_opt: bool=True) -> None:
+        """Shared forward pass implementation for teacher/student paths."""
         __hidden = (
             (float(self._config['loss'].get('mse_k_rate', 0.0)) > 0.0)
             or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0))
@@ -461,9 +465,11 @@ class PrefixTrainer:
                         mask_arr=self._state['tensors']['inputs/mask'],
                         model_obj=self._teacher)
             # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
-            self._state['tensors']['outputs/student/0'] = self._student(
-                self._state['tensors']['inputs/bytes']
-            ).to(dtype=self._state['tensors']['outputs/teacher/0'].dtype)
+            __student_ctx = contextlib.nullcontext() if student_grad_opt else torch.no_grad()
+            with __student_ctx:
+                self._state['tensors']['outputs/student/0'] = self._student(
+                    self._state['tensors']['inputs/bytes']
+                ).to(dtype=self._state['tensors']['outputs/teacher/0'].dtype)
             # do not compute the hidden activations by default
             self._state['tensors']['outputs/student/k'] = torch.zeros(
                 tuple(self._state['tensors']['outputs/student/0'].shape),
@@ -475,6 +481,10 @@ class PrefixTrainer:
                     embeds_arr=self._state['tensors']['outputs/student/0'],
                     mask_arr=self._state['tensors']['inputs/mask'],
                     model_obj=self._teacher)
+
+    def step_forward(self) -> None:
+        """Run teacher and student forwards for the current batch."""
+        self._step_forward_impl(student_grad_opt=True)
 
     # LOSS #####################################################################
 
@@ -500,6 +510,10 @@ class PrefixTrainer:
         self._state['scalars']['loss/cos/0'] += float(__outputs[2].item())
         self._state['scalars']['loss/cos/k'] += float(__outputs[3].item())
         self._state['scalars']['loss/total'] += float(__outputs[4].item())
+
+    def step_objective(self) -> None:
+        """Default objective path used by testing-oriented runners."""
+        self.step_losses()
 
     # BACKWARD #################################################################
 
@@ -538,8 +552,8 @@ class PrefixTrainer:
     def step_callbacks(self) -> None:
         """Run all triggered callbacks on the current state."""
         for __callback in self._callbacks:
-            if __callback['trigger'](self._state['scalars']):
-                __callback['operation'](self._state['scalars'])
+            if __callback['trigger'](self._state):
+                __callback['operation'](self._state)
 
     def close_callbacks(self) -> None:
         """Run cleanup on all registered callbacks."""
@@ -550,8 +564,46 @@ class PrefixTrainer:
 
     def step_progress(self, pbar_obj: object) -> None:
         # only work every few steps, after accumulating the loss on a few batches
-        if bool(self._state['scalars']['switch/grad']):
+        if self._should_show_progress():
             # aggregate and format
             __stats = _callbacks.format_state(state=self._state['scalars'])
             # filter the epoch and step since they are already in the pbar
             pbar_obj.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
+
+    def _should_show_progress(self) -> bool:
+        """Hook controlling whether progress should be displayed this step."""
+        return bool(self._state['scalars']['switch/grad'])
+
+
+class PrefixTrainer(BaseRunner):
+    """Prefix runner with gradient-based optimization behavior."""
+
+    def _check_runtime_setup(self) -> None:
+        assert self._optimizer is not None, 'optimizer is None; call setup_global() first.'
+        assert self._scaler is not None, 'scaler is None; call setup_global() first.'
+        assert self._scheduler is not None, 'scheduler is None; call setup_phase() first.'
+
+    def step_objective(self) -> None:
+        self.step_losses()
+        if bool(self._state['scalars']['switch/train']):
+            self.step_backward()
+            self.step_optimizer()
+
+
+class PrefixTester(BaseRunner):
+    """Prefix runner for evaluation/benchmark phases without parameter updates."""
+
+    def init_step(self, step_num: int) -> None:
+        super().init_step(step_num=step_num)
+        self._state['scalars']['switch/train'] = 0
+        self._state['scalars']['switch/grad'] = 0
+
+    def step_forward(self) -> None:
+        with torch.no_grad():
+            self._step_forward_impl(student_grad_opt=False)
+
+    def _should_close_step(self) -> bool:
+        return True
+
+    def _should_show_progress(self) -> bool:
+        return True

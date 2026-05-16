@@ -83,6 +83,7 @@ Architecture experiments (planned):
 - [x] track cosine similarity alongside MSE
 - [x] lifecycle-oriented trainer API:
   - [x] trainer owns utility setup from configuration (no prebuilt objects in constructor)
+  - [x] shared runner split into `BaseRunner`, `PrefixTrainer`, and `PrefixTester`
   - [x] `setup_global()` creates long-lived utilities (optimizer, scaler, context)
   - [x] `setup_phase()` creates phase-local utilities (scheduler, callbacks)
   - [x] single trainer instance reusable across phases; optimizer persists

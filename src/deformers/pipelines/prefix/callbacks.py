@@ -45,15 +45,16 @@ def prepare_speed_callback(
 ) -> dict:
     # test whether the callback should be run
     def __trigger(state: dict) -> bool:
-        return (state['step/current'] % every_num) == 0
+        return (state['scalars']['step/current'] % every_num) == 0
     # write the state to the target file
     def __operation(state: dict) -> None:
+        __scalars = state['scalars']
         # time in seconds
-        state['iter/time'] = time.monotonic() - state['iter/start']
+        __scalars['iter/time'] = time.monotonic() - __scalars['iter/start']
         # tokens per second
-        state['iter/tps'] = deformers.pipelines.monitor.throughput(every_num * batch_len, state['iter/time'])
+        __scalars['iter/tps'] = deformers.pipelines.monitor.throughput(every_num * batch_len, __scalars['iter/time'])
         # reset the timer
-        state['iter/start'] = time.monotonic()
+        __scalars['iter/start'] = time.monotonic()
     # format as a callback
     return {
         'name': 'speed',
@@ -70,14 +71,15 @@ def prepare_ema_callback(
 ) -> dict:
     # test whether the callback should be run
     def __trigger(state: dict) -> bool:
-        return (state['step/current'] % every_num) == 0
+        return (state['scalars']['step/current'] % every_num) == 0
     # write the state to the target file
     def __operation(state: dict) -> None:
+        __scalars = state['scalars']
         # track the loss EMA, default to the current loss for the first few steps
-        state['loss/ema'] = mlable.utils.ema(
-            average=float(state['loss/ema']),
-            current=float(state['loss/total']),
-            factor=smooth_rate * float(state['step/current'] > start_num))
+        __scalars['loss/ema'] = mlable.utils.ema(
+            average=float(__scalars['loss/ema']),
+            current=float(__scalars['loss/total']),
+            factor=smooth_rate * float(__scalars['step/current'] > start_num))
     # format as a callback
     return {
         'name': 'ema',
@@ -97,11 +99,11 @@ def prepare_logging_callback(
     __file = open(path_str, 'w')
     # test whether the callback should be run
     def __trigger(state: dict) -> bool:
-        return (state['step/current'] % every_num) == 0
+        return (state['scalars']['step/current'] % every_num) == 0
     # write the state to the target file
     def __operation(state: dict) -> None:
         # aggregate and format
-        __stats = format_state(state=state)
+        __stats = format_state(state=state['scalars'])
         # write as a single line
         __file.write(deformers.pipelines.monitor.serialize_state(state=__stats, prefix='') + '\n')
     # close the file on cleanup
@@ -124,11 +126,12 @@ def prepare_tensorboard_callback(
     __writer = torch.utils.tensorboard.SummaryWriter(log_dir=path_str)
     # test whether the callback should be run
     def __trigger(state: dict) -> bool:
-        return (state['step/current'] % every_num) == 0
+        return (state['scalars']['step/current'] % every_num) == 0
     # write the state to the target file
     def __operation(state: dict) -> None:
+        __scalars = state['scalars']
         # write all the scalars
-        deformers.pipelines.monitor.log_scalars(writer=__writer, step=state['step/current'], scalars=state)
+        deformers.pipelines.monitor.log_scalars(writer=__writer, step=__scalars['step/current'], scalars=__scalars)
     # close the file on cleanup
     def __cleanup() -> None:
         __writer.close()
@@ -150,7 +153,7 @@ def prepare_saving_callback(
     os.makedirs(os.path.dirname(path_str), exist_ok=True)
     # test whether the callback should be run
     def __trigger(state: dict) -> bool:
-        return (state['step/current'] % every_num) == 0
+        return (state['scalars']['step/current'] % every_num) == 0
     # write the state to the target file
     def __operation(state: dict) -> None:
         # save the configuration and state of the model in a single file
@@ -170,11 +173,11 @@ def prepare_progress_callback(
 ) -> dict:
     # test whether the callback should be run
     def __trigger(state: dict) -> bool:
-        return (state['step/current'] % every_num) == 0
+        return (state['scalars']['step/current'] % every_num) == 0
     # write the state to the target file
     def __operation(state: dict) -> None:
         # aggregate and format
-        __stats = format_state(state=state)
+        __stats = format_state(state=state['scalars'])
         # filter the epoch and step since they are already in the pbar
         pbar_obj.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
     # format as a callback
