@@ -39,7 +39,7 @@ import deformers.pipelines.prefix.processors as _processors
 def is_iterable(data: object) -> bool:
     try:
         data[0]
-    except Exception:
+    except (IndexError, KeyError, TypeError):
         return False
     return True
 

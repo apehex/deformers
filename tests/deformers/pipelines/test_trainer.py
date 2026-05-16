@@ -212,6 +212,7 @@ class TestPrefixTrainerBehavior:
 
     def test_step_forward_keeps_student_gradients_enabled(self, monkeypatch):
         trainer = _configure_trainer(_make_prefix_trainer())
+        trainer._config['loss']['mse_k_rate'] = 1.0
         trainer._state['tensors'].update(_make_inputs())
         _patch_forward(monkeypatch)
 
@@ -219,6 +220,9 @@ class TestPrefixTrainerBehavior:
 
         assert trainer._state['tensors']['outputs/student/0'].requires_grad
         assert trainer._state['tensors']['outputs/student/k'].shape == trainer._state['tensors']['outputs/student/0'].shape
+        assert torch.equal(
+            trainer._state['tensors']['outputs/student/k'],
+            trainer._state['tensors']['outputs/student/0'] + 1.0)
 
     def test_step_update_runs_backward_and_optimizer(self):
         trainer = _configure_trainer(_make_prefix_trainer())
