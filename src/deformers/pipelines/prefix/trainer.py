@@ -1,24 +1,21 @@
-"""The trainer owns:
+"""Prefix pipeline runners.
+
+The runners own:
 - mutable runtime state
 - teacher/student references (external)
 - tokenizer references (external)
-- training utility setup from per-setup configuration (optimizer/scaler/context/scheduler/callbacks)
-- current configuration
-- core training loop operations
+- setup and validation of runtime utilities
+- shared phase / epoch / step orchestration
 
 Stateless transforms such as vectorization and loss computation remain in
 `deformers.pipelines.prefix.processors`.
 
 Typical lifecycle:
-    trainer = PrefixTrainer(text_tok, byte_tok, teacher, student)
-    trainer.setup_global(context_cfg=..., optimizer_cfg=..., scaler_cfg=...)
-    trainer.setup_phase(dataset, epoch_num, column, batch_cfg=..., loss_cfg=..., ...)
-    trainer.run_phase()                     # runs all epochs
-    trainer.close_callbacks()
-
-    trainer.setup_phase(dataset2, epoch_num2, column2, batch_cfg=..., loss_cfg=..., ...)
-    trainer.run_phase()
-    trainer.close_callbacks()
+    runner = PrefixTrainer(text_tok, byte_tok, teacher, student)
+    runner.setup_global(context_cfg=..., optimizer_cfg=..., scaler_cfg=...)
+    runner.setup_phase(dataset, phase_cfg=..., batch_cfg=..., loss_cfg=..., ...)
+    runner.run_phase()
+    runner.cleanup_callbacks()
 """
 
 import contextlib
@@ -32,7 +29,6 @@ import tqdm
 
 import mlable.models
 import mlable.schedulers
-import mlable.utils
 
 import deformers.pipelines.monitor as _monitor
 import deformers.pipelines.prefix.callbacks as _callbacks
@@ -43,9 +39,10 @@ import deformers.pipelines.prefix.processors as _processors
 def is_iterable(data: object) -> bool:
     try:
         data[0]
-    except:
+    except Exception:
         return False
     return True
+
 
 def is_text(data: object) -> bool:
     return (
@@ -60,12 +57,11 @@ def is_text(data: object) -> bool:
                         is_iterable(data[0])
                         and isinstance(data[0][0], str))))))
 
-# TRAINER ######################################################################
 
-class PrefixTrainer:
-    """Thin orchestration class for the prefix training phases."""
+# RUNNERS ######################################################################
 
-    # INIT #####################################################################
+class BaseRunner:
+    """Common lifecycle and orchestration logic for prefix pipeline runners."""
 
     def __init__(
         self,
@@ -74,51 +70,43 @@ class PrefixTrainer:
         teacher_mod: object,
         student_mod: object,
     ) -> None:
-        # text <=> bytes utilities (external)
         self._text_tok = text_tok
         self._byte_tok = byte_tok
-        # targets of the training (external)
         self._teacher = teacher_mod
         self._student = student_mod
-        # training utilities (populated by setup_* methods, not the constructor)
         self._context = None
-        self._optimizer = None
-        self._scaler = None
-        # current phase attributes (set by setup_phase)
-        self._scheduler = None
         self._dataset = None
-        # can be changed at any time
         self._callbacks = []
-        # empty configuration
         self._config = self.init_config()
-        # initialize the state
         self._state = self.init_state()
 
     def init_config(self) -> dict[str, dict]:
         return {
-            'context': {}, # dtype and device
-            'optimizer': {}, # global level
-            'scaler': {}, # global level
-            'phase': {}, # phase level
-            'batch': {}, # phase level
-            'loss': {}, # phase level
-            'gradient': {}, # phase level
-            'scheduler': {}, # phase level
-            'testing': {}, # callback
-            'ema': {}, # callback
-            'speed': {}, # callback
-            'logging': {}, # callback
-            'tboard': {}, # callback
-            'saving': {},} # callback
+            'context': {},
+            'optimizer': {},
+            'scaler': {},
+            'phase': {},
+            'batch': {},
+            'loss': {},
+            'gradient': {},
+            'scheduler': {},
+            'testing': {},
+            'ema': {},
+            'speed': {},
+            'logging': {},
+            'tboard': {},
+            'saving': {},}
 
-    def init_state(self, override: dict={}) -> dict[str, dict]:
-        """Build the nested runtime state, optionally overriding `tensors` and `scalars`."""
+    def _default_train_switch(self) -> int:
+        return 1
+
+    def init_state(self, override: dict=None) -> dict[str, dict]:
+        """Build the nested runtime state."""
         override = dict(override or {})
         return {
-            'tensors': override.get('tensors', {}),
             'scalars': {
                 **{
-                    'switch/train': 1,
+                    'switch/train': self._default_train_switch(),
                     'switch/grad': 0,
                     'switch/log': 0,
                     'switch/save': 0,
@@ -141,86 +129,72 @@ class PrefixTrainer:
                     'vocab/seen': 0.0,
                     'vocab/min': 0,
                     'vocab/max': 0,},
-                **override.get('scalars', {}),},}
+                **override.get('scalars', {}),},
+            'tensors': override.get('tensors', {}),
+            'metadata': {
+                **{
+                    'runner/name': self.__class__.__name__,
+                    'phase/column': '',},
+                **override.get('metadata', {}),},}
 
     # CONFIG ###################################################################
 
     def _check_config(self, config_dict: object, required_keys: tuple[str]=()) -> bool:
-        """Check whether an input configuration has the right format."""
         return isinstance(config_dict, dict) and all(__key in config_dict for __key in required_keys)
 
+    def _check_runner_setup(self) -> None:
+        pass
+
     def _check_setup(self) -> None:
-        """Raise AssertionError if the trainer is not ready to run a phase."""
         assert self._context is not None, 'context is None; call setup_global() first.'
-        assert self._optimizer is not None, 'optimizer is None; call setup_global() first.'
-        assert self._scaler is not None, 'scaler is None; call setup_global() first.'
-        assert self._scheduler is not None, 'scheduler is None; call setup_phase() first.'
         assert self._dataset is not None, 'dataset is None; call setup_phase() first.'
+        assert self._check_config(self._config['phase'], ('column_str', 'epoch_num')), 'phase config is incomplete; call setup_phase() with phase_cfg.'
+        assert self._check_config(self._config['batch'], ('batch_dim', 'sequence_dim', 'patch_dim')), 'batch config is incomplete; call setup_phase() with batch_cfg.'
+        assert self._check_config(self._config['loss'], ('mse_0_rate', 'mse_k_rate', 'cos_0_rate', 'cos_k_rate')), 'loss config is incomplete; call setup_phase() with loss_cfg.'
+        self._check_runner_setup()
 
     # GLOBAL ###################################################################
 
-    def setup_context(self, context_cfg: dict={}) -> None:
-        """Create the autocast context from training config."""
+    def setup_context(self, context_cfg: dict=None) -> None:
+        context_cfg = dict(context_cfg or {})
         if self._check_config(context_cfg, ('device', 'dtype')):
-            # save the configuration for import / export
             self._config['context'] = context_cfg
-            # default to a no-op context
             self._context = contextlib.nullcontext()
-            # use mixed precision otherwise
             __dtype = context_cfg.get('dtype', torch.float32)
             if __dtype != torch.float32:
                 self._context = torch.amp.autocast(
                     device_type=context_cfg.get('device', 'cpu'),
                     dtype=__dtype)
 
-    def setup_optimizer(self, optimizer_cfg: dict={}) -> None:
-        """Create the AdamW optimizer from config."""
-        if self._check_config(optimizer_cfg, ('lr',)):
-            # save the configuration for import / export
-            self._config['optimizer'] = optimizer_cfg
-            # operate on the student model only
-            self._optimizer = torch.optim.AdamW(self._student.parameters(), **optimizer_cfg)
-            # make sure the gradients start at 0
-            self._optimizer.zero_grad()
-
-    def setup_scaler(self, scaler_cfg: dict={}) -> None:
-        """Create the GradScaler from config."""
-        if self._check_config(scaler_cfg, ('enabled',)):
-            # save the configuration for import / export
-            self._config['scaler'] = scaler_cfg
-            # reduce gradient underflow with dtype float16
-            self._scaler = torch.amp.GradScaler(**dict(scaler_cfg))
-
     def setup_global(
         self,
-        context_cfg: dict={},
-        optimizer_cfg: dict={},
-        scaler_cfg: dict={},
+        context_cfg: dict=None,
+        optimizer_cfg: dict=None,
+        scaler_cfg: dict=None,
         overwrite_opt: bool=False,
     ) -> None:
-        """Initialize long-lived utilities: optimizer, scaler, and mixed-precision context."""
+        del optimizer_cfg, scaler_cfg
         if overwrite_opt or self._context is None:
             self._context = None
             self.setup_context(context_cfg=context_cfg)
-        if overwrite_opt or self._optimizer is None:
-            self._optimizer = None
-            self.setup_optimizer(optimizer_cfg=optimizer_cfg)
-        if overwrite_opt or self._scaler is None:
-            self._scaler = None
-            self.setup_scaler(scaler_cfg=scaler_cfg)
 
     # PHASE ####################################################################
 
     def setup_configs(
         self,
-        phase_cfg: dict={},
-        batch_cfg: dict={},
-        loss_cfg: dict={},
-        gradient_cfg: dict={},
+        phase_cfg: dict=None,
+        batch_cfg: dict=None,
+        loss_cfg: dict=None,
+        gradient_cfg: dict=None,
     ) -> None:
+        phase_cfg = dict(phase_cfg or {})
+        batch_cfg = dict(batch_cfg or {})
+        loss_cfg = dict(loss_cfg or {})
+        gradient_cfg = dict(gradient_cfg or {})
         if self._check_config(phase_cfg, ('column_str', 'epoch_num')):
             self._config['phase'] = phase_cfg
-            self._state['scalars']['epoch/total'] = self._config['phase']['epoch_num']
+            self._state['scalars']['epoch/total'] = int(self._config['phase']['epoch_num'])
+            self._state['metadata']['phase/column'] = self._config['phase']['column_str']
         if self._check_config(batch_cfg, ('batch_dim', 'sequence_dim', 'patch_dim')):
             self._config['batch'] = batch_cfg
         if self._check_config(loss_cfg, ('mse_0_rate', 'mse_k_rate', 'cos_0_rate', 'cos_k_rate')):
@@ -228,28 +202,23 @@ class PrefixTrainer:
         if self._check_config(gradient_cfg, ('every_num', 'max_norm')):
             self._config['gradient'] = gradient_cfg
 
-    def setup_scheduler(self, scheduler_cfg: dict={}) -> None:
-        """Create a WaveLR scheduler from config."""
-        if self._check_config(scheduler_cfg, ('start_rate', 'end_rate', 'total_num', 'warmup_num')):
-            # save the configuration for import / export
-            self._config['scheduler'] = scheduler_cfg
-            # linear warmup + cosine decay
-            self._scheduler = mlable.schedulers.WaveLR(optimizer_obj=self._optimizer, **scheduler_cfg)
-
     def setup_callbacks(
         self,
-        testing_cfg: dict={},
-        ema_cfg: dict={},
-        speed_cfg: dict={},
-        logging_cfg: dict={},
-        tboard_cfg: dict={},
-        saving_cfg: dict={},
+        testing_cfg: dict=None,
+        ema_cfg: dict=None,
+        speed_cfg: dict=None,
+        logging_cfg: dict=None,
+        tboard_cfg: dict=None,
+        saving_cfg: dict=None,
     ) -> None:
-        """Build the phase callbacks from the provided configs."""
+        testing_cfg = dict(testing_cfg or {})
+        ema_cfg = dict(ema_cfg or {})
+        speed_cfg = dict(speed_cfg or {})
+        logging_cfg = dict(logging_cfg or {})
+        tboard_cfg = dict(tboard_cfg or {})
+        saving_cfg = dict(saving_cfg or {})
         self._callbacks = []
-        # todo
         self._config['testing'] = testing_cfg
-        # overwrite the list of callbacks, even when there are none
         if self._check_config(ema_cfg, ('every_num', 'start_num', 'smooth_rate')):
             self._config['ema'] = ema_cfg
             self._callbacks.append(_callbacks.prepare_ema_callback(**ema_cfg))
@@ -269,31 +238,25 @@ class PrefixTrainer:
     def setup_phase(
         self,
         dataset_obj: object,
-        phase_cfg: dict={},
-        batch_cfg: dict={},
-        loss_cfg: dict={},
-        gradient_cfg: dict={},
-        scheduler_cfg: dict={},
-        testing_cfg: dict={},
-        ema_cfg: dict={},
-        speed_cfg: dict={},
-        logging_cfg: dict={},
-        tboard_cfg: dict={},
-        saving_cfg: dict={},
+        phase_cfg: dict=None,
+        batch_cfg: dict=None,
+        loss_cfg: dict=None,
+        gradient_cfg: dict=None,
+        scheduler_cfg: dict=None,
+        testing_cfg: dict=None,
+        ema_cfg: dict=None,
+        speed_cfg: dict=None,
+        logging_cfg: dict=None,
+        tboard_cfg: dict=None,
+        saving_cfg: dict=None,
     ) -> None:
-        """Configure a training phase: store config, dataset info, rebuild scheduler and callbacks."""
+        del scheduler_cfg
         self._dataset = dataset_obj
-        # overwrite the configurations
         self.setup_configs(
             phase_cfg=phase_cfg,
             batch_cfg=batch_cfg,
             loss_cfg=loss_cfg,
             gradient_cfg=gradient_cfg)
-        # always recreate phase-local utilities
-        self._scheduler = None
-        self.setup_scheduler(scheduler_cfg=scheduler_cfg)
-        # could remain empty
-        self._callbacks = []
         self.setup_callbacks(
             testing_cfg=testing_cfg,
             ema_cfg=ema_cfg,
@@ -303,16 +266,15 @@ class PrefixTrainer:
             saving_cfg=saving_cfg)
 
     def run_phase(self) -> None:
-        """Run all epochs of the current phase using config set by setup_phase()."""
-        # make sure all the training utilities are there 
         self._check_setup()
-        # the previous step implies that the configs are valid
-        for __epoch in range(self._config['phase']['epoch_num']):
+        __epoch_tot = int(self._config['phase']['epoch_num'])
+        __column_str = self._config['phase']['column_str']
+        for __epoch in range(__epoch_tot):
             self.run_epoch(
                 epoch_num=__epoch,
-                epoch_tot=self._config['phase']['epoch_num'],
+                epoch_tot=__epoch_tot,
                 dataset_obj=self._dataset,
-                column_str=self._config['phase']['column_str'])
+                column_str=__column_str)
 
     # EPOCH ####################################################################
 
@@ -322,13 +284,10 @@ class PrefixTrainer:
         epoch_tot: int,
         dataset_obj: object,
     ) -> object:
-        """Start a new epoch."""
         __step_tot = len(dataset_obj)
-        # track the iteration counters
         self._state['scalars']['epoch/total'] = int(epoch_tot)
         self._state['scalars']['epoch/current'] = int(epoch_num) + 1
         self._state['scalars']['step/total'] = int(__step_tot)
-        # create a fresh iterator on the dataset
         return tqdm.tqdm(
             iter(dataset_obj),
             total=__step_tot,
@@ -343,79 +302,72 @@ class PrefixTrainer:
         dataset_obj: object,
         column_str: str,
     ) -> None:
-        """Run one epoch over a dataset."""
         __pbar = self.init_epoch(
             epoch_num=epoch_num,
             epoch_tot=epoch_tot,
             dataset_obj=dataset_obj)
-        # fresh iterator on the dataset
         for __step, __batch in enumerate(__pbar):
-            # track the counters in the state
             self.init_step(step_num=__step)
-            # vectorize => forward => loss => backward => update => callbacks => reset
             self.run_step(batch_arr=__batch, column_str=column_str)
-            # format and display the main stats
             self.step_progress(__pbar)
-            # reset the loss and free the memory
             self.close_step()
-        # terminate the progress bar
         self.close_epoch(__pbar)
 
     def close_epoch(self, pbar_obj: object) -> None:
-        """Terminate the temporary state of the epoch."""
         pbar_obj.close()
 
     # STEP #####################################################################
 
+    def _resolve_train_switch(self, step_num: int, test_every: int) -> int:
+        return int((test_every < 1) or ((step_num % test_every) != 0))
+
+    def _resolve_grad_switch(self, step_num: int, grad_every: int) -> int:
+        return int((step_num % grad_every) == 0)
+
     def init_step(self, step_num: int) -> None:
-        """Update counters and step switches."""
         __step_num = int(step_num) + 1
-        # step/global is a monotonically increasing counter that persists across epochs and phases
         self._state['scalars']['step/global'] += 1
         self._state['scalars']['step/current'] = __step_num
-        # frequency of the main operations
         __test_every = int(self._config['testing'].get('every_num', 0))
         __log_every = int(self._config['logging'].get('every_num', 0))
         __save_every = int(self._config['saving'].get('every_num', 0))
         __grad_every = int(self._config['gradient'].get('every_num', 1))
-        # tracks the operation that (will) run on the current step
-        self._state['scalars']['switch/train'] = int((__test_every < 1) or ((__step_num % __test_every) != 0))
+        self._state['scalars']['switch/train'] = self._resolve_train_switch(__step_num, __test_every)
         self._state['scalars']['switch/log'] = int((__log_every > 0) and ((__step_num % __log_every) == 0))
         self._state['scalars']['switch/save'] = int((__save_every > 0) and ((__step_num % __save_every) == 0))
-        self._state['scalars']['switch/grad'] = int((__step_num % __grad_every) == 0)
+        self._state['scalars']['switch/grad'] = self._resolve_grad_switch(__step_num, __grad_every)
 
     def run_step(
         self,
         batch_arr: object,
         column_str: str,
     ) -> None:
-        """Run one training step."""
         self.step_batch(batch_arr=batch_arr, column_str=column_str)
         self.step_forward()
         self.step_losses()
-        self.step_backward()
-        self.step_optimizer()
+        self.step_update()
         self.step_callbacks()
 
+    def step_update(self) -> None:
+        pass
+
+    def _should_reset_state(self) -> bool:
+        return True
+
     def close_step(self) -> None:
-        """Reset the state after updating the weights."""
-        if bool(self._state['scalars']['switch/grad']):
-            # only reset after a weight update, because the mini batch losses accumulate accross steps
+        if self._should_reset_state():
             self._state['tensors'] = {}
             self._state['scalars']['loss/total'] = 0.0
             self._state['scalars']['loss/mse/0'] = 0.0
             self._state['scalars']['loss/mse/k'] = 0.0
             self._state['scalars']['loss/cos/0'] = 0.0
             self._state['scalars']['loss/cos/k'] = 0.0
-            # garbage collection
             mlable.models.free_memory()
 
     # VECTORIZE ################################################################
 
     def step_batch(self, batch_arr: object, column_str: str) -> None:
-        """Vectorize a raw batch into mask, token ids, and byte patches."""
         __pad = self._config['batch'].get('padding_str', '')
-        # common args
         __args = {
             'text_tok': self._text_tok,
             'byte_tok': self._byte_tok,
@@ -424,62 +376,71 @@ class PrefixTrainer:
             'sequence_dim': int(self._config['batch']['sequence_dim']),
             'patch_dim': int(self._config['batch']['patch_dim']),
             'left_pad': bool(self._config['batch'].get('left_pad', True)),}
-        # check the content of the batch
         if 'indice' in column_str:
             __tensors = _processors.vectorize_indices(indices_arr=batch_arr[column_str], padding_str=__pad, **__args)
-        # already byte encoded
         else:
             __tensors = _processors.vectorize_strings(text_arr=batch_arr[column_str], **__args)
-        # save the tensors
         self._state['tensors']['inputs/mask'] = __tensors[0]
         self._state['tensors']['inputs/indices'] = __tensors[1]
         self._state['tensors']['inputs/bytes'] = __tensors[2]
 
     # FORWARD ##################################################################
 
-    def step_forward(self) -> None:
-        """Run teacher and student forwards for the current batch."""
-        __hidden = (
+    def _hidden_outputs_enabled(self) -> bool:
+        return (
             (float(self._config['loss'].get('mse_k_rate', 0.0)) > 0.0)
             or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0))
-        # mixed precision context
+
+    def _student_grad_context(self) -> object:
+        return contextlib.nullcontext()
+
+    def _teacher_embed(self) -> torch.Tensor:
+        return _processors.embed(
+            indices_arr=self._state['tensors']['inputs/indices'],
+            model_obj=self._teacher)
+
+    def _teacher_forward(self, embeds_arr: torch.Tensor) -> torch.Tensor:
+        return _processors.forward(
+            embeds_arr=embeds_arr,
+            mask_arr=self._state['tensors']['inputs/mask'],
+            model_obj=self._teacher)
+
+    def _student_embed(self) -> torch.Tensor:
+        return self._student(self._state['tensors']['inputs/bytes'])
+
+    def _student_forward(self, embeds_arr: torch.Tensor) -> torch.Tensor:
+        return _processors.forward(
+            embeds_arr=embeds_arr,
+            mask_arr=self._state['tensors']['inputs/mask'],
+            model_obj=self._teacher)
+
+    def step_forward(self) -> None:
+        __hidden = self._hidden_outputs_enabled()
         with self._context:
             with torch.no_grad():
-                # teacher forward: get original embeddings and hidden states (no grad)
-                self._state['tensors']['outputs/teacher/0'] = _processors.embed(
-                    indices_arr=self._state['tensors']['inputs/indices'],
-                    model_obj=self._teacher)
-                # do not compute the hidden activations by default
-                self._state['tensors']['outputs/teacher/k'] = torch.zeros(
-                    tuple(self._state['tensors']['outputs/teacher/0'].shape),
-                    dtype=self._state['tensors']['outputs/teacher/0'].dtype,
-                    device=self._state['tensors']['outputs/teacher/0'].device)
-                # compute the hidden activations only if they are used in the loss
+                __teacher_0 = self._teacher_embed()
+                __teacher_k = torch.zeros(
+                    tuple(__teacher_0.shape),
+                    dtype=__teacher_0.dtype,
+                    device=__teacher_0.device)
                 if __hidden:
-                    self._state['tensors']['outputs/teacher/k'] = _processors.forward(
-                        embeds_arr=self._state['tensors']['outputs/teacher/0'],
-                        mask_arr=self._state['tensors']['inputs/mask'],
-                        model_obj=self._teacher)
-            # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
-            self._state['tensors']['outputs/student/0'] = self._student(
-                self._state['tensors']['inputs/bytes']
-            ).to(dtype=self._state['tensors']['outputs/teacher/0'].dtype)
-            # do not compute the hidden activations by default
-            self._state['tensors']['outputs/student/k'] = torch.zeros(
-                tuple(self._state['tensors']['outputs/student/0'].shape),
-                dtype=self._state['tensors']['outputs/student/0'].dtype,
-                device=self._state['tensors']['outputs/student/0'].device)
-            # compute the hidden activations only if they are used in the loss
-            if __hidden:
-                self._state['tensors']['outputs/student/k'] = _processors.forward(
-                    embeds_arr=self._state['tensors']['outputs/student/0'],
-                    mask_arr=self._state['tensors']['inputs/mask'],
-                    model_obj=self._teacher)
+                    __teacher_k = self._teacher_forward(embeds_arr=__teacher_0)
+            with self._student_grad_context():
+                __student_0 = self._student_embed().to(dtype=__teacher_0.dtype)
+                __student_k = torch.zeros(
+                    tuple(__student_0.shape),
+                    dtype=__student_0.dtype,
+                    device=__student_0.device)
+                if __hidden:
+                    __student_k = self._student_forward(embeds_arr=__student_0)
+        self._state['tensors']['outputs/teacher/0'] = __teacher_0
+        self._state['tensors']['outputs/teacher/k'] = __teacher_k
+        self._state['tensors']['outputs/student/0'] = __student_0
+        self._state['tensors']['outputs/student/k'] = __student_k
 
     # LOSS #####################################################################
 
     def step_losses(self) -> None:
-        """Compute tensor loss and detached scalar metrics for the current batch."""
         __outputs = _processors.compute_losses(
             mask_arr=self._state['tensors']['inputs/mask'],
             student_0_arr=self._state['tensors']['outputs/student/0'],
@@ -492,66 +453,174 @@ class PrefixTrainer:
             cos_0_rate=float(self._config['loss'].get('cos_0_rate', 1.0)),
             cos_k_rate=float(self._config['loss'].get('cos_k_rate', 0.0)),
             relative_opt=bool(self._config['loss'].get('relative_opt', True)))
-        # the tensor loss is needed for the backward computation
         self._state['tensors']['loss/total'] = __outputs[-1]
-        # track the loss components
         self._state['scalars']['loss/mse/0'] += float(__outputs[0].item())
         self._state['scalars']['loss/mse/k'] += float(__outputs[1].item())
         self._state['scalars']['loss/cos/0'] += float(__outputs[2].item())
         self._state['scalars']['loss/cos/k'] += float(__outputs[3].item())
         self._state['scalars']['loss/total'] += float(__outputs[4].item())
 
-    # BACKWARD #################################################################
+    # CALLBACKS ################################################################
+
+    def step_callbacks(self) -> None:
+        for __callback in self._callbacks:
+            if __callback['trigger'](self._state):
+                __callback['operation'](self._state)
+
+    def cleanup_callbacks(self) -> None:
+        for __callback in self._callbacks:
+            __callback['cleanup']()
+
+    def close_callbacks(self) -> None:
+        self.cleanup_callbacks()
+
+    # PROGRESS #################################################################
+
+    def _should_report_progress(self) -> bool:
+        return True
+
+    def step_progress(self, pbar_obj: object) -> None:
+        if self._should_report_progress():
+            __stats = _callbacks.format_state(state=self._state)
+            pbar_obj.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
+
+
+class PrefixTrainer(BaseRunner):
+    """Training runner with gradient updates, optimizer, scaler, and scheduler."""
+
+    def __init__(
+        self,
+        text_tok: object,
+        byte_tok: object,
+        teacher_mod: object,
+        student_mod: object,
+    ) -> None:
+        super().__init__(
+            text_tok=text_tok,
+            byte_tok=byte_tok,
+            teacher_mod=teacher_mod,
+            student_mod=student_mod)
+        self._optimizer = None
+        self._scaler = None
+        self._scheduler = None
+
+    def _check_runner_setup(self) -> None:
+        assert self._optimizer is not None, 'optimizer is None; call setup_global() first.'
+        assert self._scaler is not None, 'scaler is None; call setup_global() first.'
+        assert self._scheduler is not None, 'scheduler is None; call setup_phase() first.'
+
+    def setup_optimizer(self, optimizer_cfg: dict=None) -> None:
+        optimizer_cfg = dict(optimizer_cfg or {})
+        if self._check_config(optimizer_cfg, ('lr',)):
+            self._config['optimizer'] = optimizer_cfg
+            self._optimizer = torch.optim.AdamW(self._student.parameters(), **optimizer_cfg)
+            self._optimizer.zero_grad()
+
+    def setup_scaler(self, scaler_cfg: dict=None) -> None:
+        scaler_cfg = dict(scaler_cfg or {})
+        if self._check_config(scaler_cfg, ('enabled',)):
+            self._config['scaler'] = scaler_cfg
+            self._scaler = torch.amp.GradScaler(**scaler_cfg)
+
+    def setup_scheduler(self, scheduler_cfg: dict=None) -> None:
+        scheduler_cfg = dict(scheduler_cfg or {})
+        if self._check_config(scheduler_cfg, ('start_rate', 'end_rate', 'total_num', 'warmup_num')):
+            self._config['scheduler'] = scheduler_cfg
+            self._scheduler = mlable.schedulers.WaveLR(optimizer_obj=self._optimizer, **scheduler_cfg)
+
+    def setup_global(
+        self,
+        context_cfg: dict=None,
+        optimizer_cfg: dict=None,
+        scaler_cfg: dict=None,
+        overwrite_opt: bool=False,
+    ) -> None:
+        super().setup_global(
+            context_cfg=context_cfg,
+            optimizer_cfg=optimizer_cfg,
+            scaler_cfg=scaler_cfg,
+            overwrite_opt=overwrite_opt)
+        if overwrite_opt or self._optimizer is None:
+            self._optimizer = None
+            self.setup_optimizer(optimizer_cfg=optimizer_cfg)
+        if overwrite_opt or self._scaler is None:
+            self._scaler = None
+            self.setup_scaler(scaler_cfg=scaler_cfg)
+
+    def setup_phase(
+        self,
+        dataset_obj: object,
+        phase_cfg: dict=None,
+        batch_cfg: dict=None,
+        loss_cfg: dict=None,
+        gradient_cfg: dict=None,
+        scheduler_cfg: dict=None,
+        testing_cfg: dict=None,
+        ema_cfg: dict=None,
+        speed_cfg: dict=None,
+        logging_cfg: dict=None,
+        tboard_cfg: dict=None,
+        saving_cfg: dict=None,
+    ) -> None:
+        super().setup_phase(
+            dataset_obj=dataset_obj,
+            phase_cfg=phase_cfg,
+            batch_cfg=batch_cfg,
+            loss_cfg=loss_cfg,
+            gradient_cfg=gradient_cfg,
+            scheduler_cfg=scheduler_cfg,
+            testing_cfg=testing_cfg,
+            ema_cfg=ema_cfg,
+            speed_cfg=speed_cfg,
+            logging_cfg=logging_cfg,
+            tboard_cfg=tboard_cfg,
+            saving_cfg=saving_cfg)
+        self._scheduler = None
+        self.setup_scheduler(scheduler_cfg=scheduler_cfg)
+
+    def step_update(self) -> None:
+        self.step_backward()
+        self.step_optimizer()
+
+    def _should_reset_state(self) -> bool:
+        return bool(self._state['scalars']['switch/grad'])
+
+    def _should_report_progress(self) -> bool:
+        return bool(self._state['scalars']['switch/grad'])
 
     def step_backward(self) -> None:
-        """Accumulate gradients from the current tensor loss."""
         __loss = self._state['tensors'].get('loss/total', None)
-        # expect a tensor, not a scalar
         assert hasattr(__loss, 'shape'), 'Missing `tensors["loss/total"]` before step_backward().'
-        # undo the float scaling before computing the backward pass
         self._scaler.scale(__loss).backward()
 
-    # UPDATE ###################################################################
-
     def step_optimizer(self) -> None:
-        """Apply optimizer, scaler, scheduler, and gradient clipping on accumulation boundary."""
         __norm_max = float(self._config['gradient'].get('max_norm', 1.0))
-        # only work every few steps, after accumulating the loss on a few batches
         if bool(self._state['scalars']['switch/grad']):
-            # gradient clipping; unscale first to get true grad norm
             self._scaler.unscale_(self._optimizer)
             self._state['scalars']['gradient/rate'] = _monitor.current_lr(self._optimizer)
             self._state['scalars']['gradient/norm'] = float(torch.nn.utils.clip_grad_norm_(
                 self._student.parameters(),
                 max_norm=__norm_max).item())
-            # update the weights
             self._scaler.step(self._optimizer)
             self._scaler.update()
-            # update the learning rate
             if self._scheduler is not None:
                 self._scheduler.step()
-            # reset the gradients
             self._optimizer.zero_grad()
 
-    # CALLBACKS ################################################################
 
-    def step_callbacks(self) -> None:
-        """Run all triggered callbacks on the current state."""
-        for __callback in self._callbacks:
-            if __callback['trigger'](self._state['scalars']):
-                __callback['operation'](self._state['scalars'])
+class PrefixTester(BaseRunner):
+    """Evaluation runner that shares the lifecycle but never tracks student grads."""
 
-    def close_callbacks(self) -> None:
-        """Run cleanup on all registered callbacks."""
-        for __callback in self._callbacks:
-            __callback['cleanup']()
+    def _default_train_switch(self) -> int:
+        return 0
 
-    # PROGRESS #################################################################
+    def _resolve_train_switch(self, step_num: int, test_every: int) -> int:
+        del step_num, test_every
+        return 0
 
-    def step_progress(self, pbar_obj: object) -> None:
-        # only work every few steps, after accumulating the loss on a few batches
-        if bool(self._state['scalars']['switch/grad']):
-            # aggregate and format
-            __stats = _callbacks.format_state(state=self._state['scalars'])
-            # filter the epoch and step since they are already in the pbar
-            pbar_obj.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
+    def _resolve_grad_switch(self, step_num: int, grad_every: int) -> int:
+        del step_num, grad_every
+        return 0
+
+    def _student_grad_context(self) -> object:
+        return torch.no_grad()
