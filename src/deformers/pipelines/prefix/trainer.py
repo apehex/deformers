@@ -122,6 +122,8 @@ class BaseRunner:
                     'switch/grad': 0,
                     'switch/log': 0,
                     'switch/save': 0,
+                    'switch/progress': 0,
+                    'switch/cleanup': 0,
                     'epoch/total': 1,
                     'epoch/current': 1,
                     'step/total': 0,
@@ -375,16 +377,35 @@ class BaseRunner:
         # step/global is a monotonically increasing counter that persists across epochs and phases
         self._state['scalars']['step/global'] += 1
         self._state['scalars']['step/current'] = __step_num
-        # frequency of the main operations
-        __test_every = int(self._config['testing'].get('every_num', 0))
-        __log_every = int(self._config['logging'].get('every_num', 0))
-        __save_every = int(self._config['saving'].get('every_num', 0))
-        __grad_every = int(self._config['gradient'].get('every_num', 1))
         # tracks the operation that (will) run on the current step
-        self._state['scalars']['switch/train'] = int((__test_every < 1) or ((__step_num % __test_every) != 0))
-        self._state['scalars']['switch/log'] = int((__log_every > 0) and ((__step_num % __log_every) == 0))
-        self._state['scalars']['switch/save'] = int((__save_every > 0) and ((__step_num % __save_every) == 0))
-        self._state['scalars']['switch/grad'] = int((__step_num % __grad_every) == 0)
+        self._state['scalars']['switch/train'] = int(self._trigger_train(step_num=__step_num))
+        self._state['scalars']['switch/log'] = int(self._trigger_log(step_num=__step_num))
+        self._state['scalars']['switch/save'] = int(self._trigger_save(step_num=__step_num))
+        self._state['scalars']['switch/grad'] = int(self._trigger_update(step_num=__step_num))
+        self._state['scalars']['switch/progress'] = int(self._trigger_progress(step_num=__step_num))
+        self._state['scalars']['switch/cleanup'] = int(self._trigger_cleanup(step_num=__step_num))
+
+    def _trigger_train(self, step_num: int) -> bool:
+        __every = int(self._config['testing'].get('every_num', 0))
+        return (__every < 1) or ((int(step_num) % __every) != 0)
+
+    def _trigger_log(self, step_num: int) -> bool:
+        __every = int(self._config['logging'].get('every_num', 0))
+        return (__every > 0) and ((int(step_num) % __every) == 0)
+
+    def _trigger_save(self, step_num: int) -> bool:
+        __every = int(self._config['saving'].get('every_num', 0))
+        return (__every > 0) and ((int(step_num) % __every) == 0)
+
+    def _trigger_update(self, step_num: int) -> bool:
+        __every = int(self._config['gradient'].get('every_num', 1))
+        return (int(step_num) % __every) == 0
+
+    def _trigger_progress(self, step_num: int) -> bool:
+        return self._trigger_update(step_num=step_num)
+
+    def _trigger_cleanup(self, step_num: int) -> bool:
+        return self._trigger_update(step_num=step_num)
 
     def run_step(
         self,
@@ -399,7 +420,10 @@ class BaseRunner:
 
     def close_step(self) -> None:
         """Reset the state after updating the weights."""
-        if self._should_close_step():
+        __cleanup_opt = bool(
+            self._state['scalars'].get('switch/cleanup', 0)
+            or self._state['scalars'].get('switch/grad', 0))
+        if __cleanup_opt:
             # reset transient tensors and accumulated scalar losses for the current step window
             self._state['tensors'] = {}
             self._state['scalars']['loss/total'] = 0.0
@@ -409,10 +433,6 @@ class BaseRunner:
             self._state['scalars']['loss/cos/k'] = 0.0
             # garbage collection
             mlable.models.free_memory()
-
-    def _should_close_step(self) -> bool:
-        """Hook controlling when `tensors` and accumulated `loss/*` scalars are reset."""
-        return bool(self._state['scalars']['switch/grad'])
 
     # VECTORIZE ################################################################
 
@@ -441,19 +461,36 @@ class BaseRunner:
 
     # FORWARD ##################################################################
 
-    def _step_forward_impl(
-        self,
-        enable_student_grad: bool = True,
-        use_teacher_no_grad: bool = True,
-    ) -> None:
-        """Shared forward pass implementation for teacher/student paths."""
-        __hidden = (
+    def _use_hidden_outputs(self) -> bool:
+        return (
             (float(self._config['loss'].get('mse_k_rate', 0.0)) > 0.0)
             or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0))
-        # mixed precision context
+
+    def _teacher_forward(
+        self,
+        hidden_opt: bool,
+        gradient_opt: bool = False,
+    ) -> None:
+        """Teacher forward path with explicit gradient mode."""
         with self._context:
-            __teacher_ctx = torch.no_grad() if use_teacher_no_grad else contextlib.nullcontext()
-            with __teacher_ctx:
+            if not gradient_opt:
+                with torch.no_grad():
+                    # teacher forward: get original embeddings and hidden states (no grad)
+                    self._state['tensors']['outputs/teacher/0'] = _processors.embed(
+                        indices_arr=self._state['tensors']['inputs/indices'],
+                        model_obj=self._teacher)
+                    # do not compute the hidden activations by default
+                    self._state['tensors']['outputs/teacher/k'] = torch.zeros(
+                        tuple(self._state['tensors']['outputs/teacher/0'].shape),
+                        dtype=self._state['tensors']['outputs/teacher/0'].dtype,
+                        device=self._state['tensors']['outputs/teacher/0'].device)
+                    # compute the hidden activations only if they are used in the loss
+                    if hidden_opt:
+                        self._state['tensors']['outputs/teacher/k'] = _processors.forward(
+                            embeds_arr=self._state['tensors']['outputs/teacher/0'],
+                            mask_arr=self._state['tensors']['inputs/mask'],
+                            model_obj=self._teacher)
+            else:
                 # teacher forward: get original embeddings and hidden states (no grad)
                 self._state['tensors']['outputs/teacher/0'] = _processors.embed(
                     indices_arr=self._state['tensors']['inputs/indices'],
@@ -464,32 +501,49 @@ class BaseRunner:
                     dtype=self._state['tensors']['outputs/teacher/0'].dtype,
                     device=self._state['tensors']['outputs/teacher/0'].device)
                 # compute the hidden activations only if they are used in the loss
-                if __hidden:
+                if hidden_opt:
                     self._state['tensors']['outputs/teacher/k'] = _processors.forward(
                         embeds_arr=self._state['tensors']['outputs/teacher/0'],
                         mask_arr=self._state['tensors']['inputs/mask'],
                         model_obj=self._teacher)
-            # student forward: prefix -> inputs_embeds -> trunk -> hidden_k
-            __student_ctx = contextlib.nullcontext() if enable_student_grad else torch.no_grad()
-            with __student_ctx:
+
+    def _student_forward(
+        self,
+        hidden_opt: bool,
+        gradient_opt: bool = True,
+    ) -> None:
+        """Student forward path with explicit gradient mode."""
+        with self._context:
+            if not gradient_opt:
+                with torch.no_grad():
+                    self._state['tensors']['outputs/student/0'] = self._student(
+                        self._state['tensors']['inputs/bytes']
+                    ).to(dtype=self._state['tensors']['outputs/teacher/0'].dtype)
+                    self._state['tensors']['outputs/student/k'] = torch.zeros(
+                        tuple(self._state['tensors']['outputs/student/0'].shape),
+                        dtype=self._state['tensors']['outputs/student/0'].dtype,
+                        device=self._state['tensors']['outputs/student/0'].device)
+                    if hidden_opt:
+                        self._state['tensors']['outputs/student/k'] = _processors.forward(
+                            embeds_arr=self._state['tensors']['outputs/student/0'],
+                            mask_arr=self._state['tensors']['inputs/mask'],
+                            model_obj=self._teacher)
+            else:
                 self._state['tensors']['outputs/student/0'] = self._student(
                     self._state['tensors']['inputs/bytes']
                 ).to(dtype=self._state['tensors']['outputs/teacher/0'].dtype)
-            # do not compute the hidden activations by default
-            self._state['tensors']['outputs/student/k'] = torch.zeros(
-                tuple(self._state['tensors']['outputs/student/0'].shape),
-                dtype=self._state['tensors']['outputs/student/0'].dtype,
-                device=self._state['tensors']['outputs/student/0'].device)
-            # compute the hidden activations only if they are used in the loss
-            if __hidden:
-                self._state['tensors']['outputs/student/k'] = _processors.forward(
-                    embeds_arr=self._state['tensors']['outputs/student/0'],
-                    mask_arr=self._state['tensors']['inputs/mask'],
-                    model_obj=self._teacher)
+                self._state['tensors']['outputs/student/k'] = torch.zeros(
+                    tuple(self._state['tensors']['outputs/student/0'].shape),
+                    dtype=self._state['tensors']['outputs/student/0'].dtype,
+                    device=self._state['tensors']['outputs/student/0'].device)
+                if hidden_opt:
+                    self._state['tensors']['outputs/student/k'] = _processors.forward(
+                        embeds_arr=self._state['tensors']['outputs/student/0'],
+                        mask_arr=self._state['tensors']['inputs/mask'],
+                        model_obj=self._teacher)
 
     def step_forward(self) -> None:
-        """Run teacher and student forwards for the current batch."""
-        self._step_forward_impl(enable_student_grad=True, use_teacher_no_grad=True)
+        raise NotImplementedError('step_forward() must be implemented by concrete runner classes.')
 
     # LOSS #####################################################################
 
@@ -569,15 +623,14 @@ class BaseRunner:
 
     def step_progress(self, pbar_obj: object) -> None:
         # only work every few steps, after accumulating the loss on a few batches
-        if self._should_show_progress():
+        __progress_opt = bool(
+            self._state['scalars'].get('switch/progress', 0)
+            or self._state['scalars'].get('switch/grad', 0))
+        if __progress_opt:
             # aggregate and format
             __stats = _callbacks.format_state(state=self._state['scalars'])
             # filter the epoch and step since they are already in the pbar
             pbar_obj.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
-
-    def _should_show_progress(self) -> bool:
-        """Hook controlling whether progress should be displayed this step."""
-        return bool(self._state['scalars']['switch/grad'])
 
 
 class PrefixTrainer(BaseRunner):
@@ -587,6 +640,11 @@ class PrefixTrainer(BaseRunner):
         assert self._optimizer is not None, 'optimizer is None; call setup_global() first.'
         assert self._scaler is not None, 'scaler is None; call setup_global() first.'
         assert self._scheduler is not None, 'scheduler is None; call setup_phase() first.'
+
+    def step_forward(self) -> None:
+        __hidden = self._use_hidden_outputs()
+        self._teacher_forward(hidden_opt=__hidden, gradient_opt=False)
+        self._student_forward(hidden_opt=__hidden, gradient_opt=True)
 
     def step_objective(self) -> None:
         self.step_losses()
@@ -598,17 +656,19 @@ class PrefixTrainer(BaseRunner):
 class PrefixTester(BaseRunner):
     """Prefix runner for evaluation/benchmark phases without parameter updates."""
 
-    def init_step(self, step_num: int) -> None:
-        """Initialize each step in evaluation mode (no train/no grad updates)."""
-        super().init_step(step_num=step_num)
-        self._state['scalars']['switch/train'] = 0
-        self._state['scalars']['switch/grad'] = 0
-
     def step_forward(self) -> None:
-        self._step_forward_impl(enable_student_grad=False, use_teacher_no_grad=True)
+        __hidden = self._use_hidden_outputs()
+        self._teacher_forward(hidden_opt=__hidden, gradient_opt=False)
+        self._student_forward(hidden_opt=__hidden, gradient_opt=False)
 
-    def _should_close_step(self) -> bool:
+    def _trigger_train(self, step_num: int) -> bool:
+        return False
+
+    def _trigger_update(self, step_num: int) -> bool:
+        return False
+
+    def _trigger_progress(self, step_num: int) -> bool:
         return True
 
-    def _should_show_progress(self) -> bool:
+    def _trigger_cleanup(self, step_num: int) -> bool:
         return True

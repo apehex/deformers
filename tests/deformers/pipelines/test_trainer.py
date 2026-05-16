@@ -463,6 +463,26 @@ class TestPrefixTesterObjective:
         __t.step_optimizer.assert_not_called()
 
 
+class TestRunnerTriggers:
+
+    def test_base_step_forward_is_abstract_contract(self):
+        __runner = _trainer.BaseRunner(
+            text_tok=unittest.mock.MagicMock(),
+            byte_tok=unittest.mock.MagicMock(),
+            teacher_mod=unittest.mock.MagicMock(),
+            student_mod=unittest.mock.MagicMock(),)
+        with pytest.raises(NotImplementedError):
+            __runner.step_forward()
+
+    def test_prefix_tester_init_step_applies_trigger_switches(self):
+        __t = _make_tester(grad_every=2, test_every=3)
+        __t.init_step(step_num=0)
+        assert __t._state['scalars']['switch/train'] == 0
+        assert __t._state['scalars']['switch/grad'] == 0
+        assert __t._state['scalars']['switch/progress'] == 1
+        assert __t._state['scalars']['switch/cleanup'] == 1
+
+
 # STEP_LOSSES ##################################################################
 
 class TestStepLosses:
