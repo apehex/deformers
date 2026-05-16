@@ -37,7 +37,11 @@ import deformers.pipelines.prefix.processors as _processors
 # GENERIC ######################################################################
 
 def is_iterable(data: object) -> bool:
-    return hasattr(data, '__getitem__')
+    try:
+        data[0]
+    except (IndexError, KeyError, TypeError):
+        return False
+    return True
 
 
 def is_text(data: object) -> bool:
