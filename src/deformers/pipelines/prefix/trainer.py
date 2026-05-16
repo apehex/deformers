@@ -174,7 +174,6 @@ class BaseRunner:
         overwrite_opt: bool=False,
     ) -> None:
         # keep the shared signature aligned with PrefixTrainer.setup_global()
-        del optimizer_cfg, scaler_cfg
         if overwrite_opt or self._context is None:
             self._context = None
             self.setup_context(context_cfg=context_cfg)
@@ -252,7 +251,6 @@ class BaseRunner:
         saving_cfg: dict=None,
     ) -> None:
         # keep the shared signature aligned with PrefixTrainer.setup_phase()
-        del scheduler_cfg
         self._dataset = dataset_obj
         self.setup_configs(
             phase_cfg=phase_cfg,
@@ -616,12 +614,10 @@ class PrefixTester(BaseRunner):
     def _default_train_switch(self) -> int:
         return 0
 
-    def _resolve_train_switch(self, step_num: int, test_every: int) -> int:
-        del step_num, test_every
+    def _resolve_train_switch(self, _step_num: int, _test_every: int) -> int:
         return 0
 
-    def _resolve_grad_switch(self, step_num: int, grad_every: int) -> int:
-        del step_num, grad_every
+    def _resolve_grad_switch(self, _step_num: int, _grad_every: int) -> int:
         return 0
 
     def _student_grad_context(self) -> object:

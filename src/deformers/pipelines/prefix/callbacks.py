@@ -30,7 +30,7 @@ def get_scalars(state: dict) -> dict:
     if 'scalars' in state:
         return state['scalars']
     if any(__key in state for __key in ['tensors', 'metadata']):
-        raise KeyError('malformed runner state: found `tensors` or `metadata` but missing required `scalars` key')
+        raise KeyError('malformed runner state: `scalars` key is required when `tensors` or `metadata` are present')
     return state
 
 # FORMAT #######################################################################
