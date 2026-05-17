@@ -480,6 +480,25 @@ class TestRunnerTriggers:
         assert __t._state['scalars']['switch/cleanup'] == 1
 
 
+class TestStepProgress:
+
+    def test_uses_trigger_progress(self):
+        __t = _make_trainer()
+        __pbar = unittest.mock.MagicMock()
+        __calls = []
+
+        def __trigger(step_num):
+            __calls.append(step_num)
+            return False
+
+        __t._trigger_progress = __trigger
+        __t._state['scalars']['step/current'] = 7
+        __t._state['scalars']['switch/grad'] = 0
+        __t.step_progress(__pbar)
+        assert __calls == [7]
+        __pbar.set_postfix.assert_not_called()
+
+
 # STEP_LOSSES ##################################################################
 
 class TestStepLosses:
@@ -950,6 +969,35 @@ class TestSetupGlobal:
         __first = __t._optimizer
         self._setup_global(__t, overwrite_opt=True)
         assert __t._optimizer is not __first
+
+
+class TestPrefixTesterSetupGlobal:
+
+    def _make_tester(self) -> _trainer.PrefixTester:
+        return _trainer.PrefixTester(
+            text_tok=unittest.mock.MagicMock(),
+            byte_tok=unittest.mock.MagicMock(),
+            teacher_mod=unittest.mock.MagicMock(),
+            student_mod=unittest.mock.MagicMock(),)
+
+    def test_stores_context_optimizer_scaler_configs(self):
+        __t = self._make_tester()
+        __t.setup_global(
+            context_cfg={'dtype': torch.float32, 'device': 'cpu'},
+            optimizer_cfg={'lr': 1e-3},
+            scaler_cfg={'enabled': False},)
+        assert __t._config['context'] == {'dtype': torch.float32, 'device': 'cpu'}
+        assert __t._config['optimizer'] == {'lr': 1e-3}
+        assert __t._config['scaler'] == {'enabled': False}
+
+    def test_does_not_create_optimizer_or_scaler(self):
+        __t = self._make_tester()
+        __t.setup_global(
+            context_cfg={'dtype': torch.float32, 'device': 'cpu'},
+            optimizer_cfg={'lr': 1e-3},
+            scaler_cfg={'enabled': False},)
+        assert __t._optimizer is None
+        assert __t._scaler is None
 
 
 # SETUP_PHASE ##################################################################

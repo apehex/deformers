@@ -161,18 +161,16 @@ class BaseRunner:
 
     # GLOBAL ###################################################################
 
-    @contextlib.contextmanager
     def _context(self, dtype_obj: object=None, gradient_opt: bool=False) -> object:
+        __context = contextlib.ExitStack()
         __context_cfg = self._config.get('context', {})
         __dtype = __context_cfg.get('dtype', torch.float32) if (dtype_obj is None) else dtype_obj
         __device = __context_cfg.get('device', 'cpu')
-        __amp_ctx = contextlib.nullcontext()
         if __dtype != torch.float32:
-            __amp_ctx = torch.amp.autocast(device_type=__device, dtype=__dtype)
-        __grad_ctx = contextlib.nullcontext() if bool(gradient_opt) else torch.no_grad()
-        with __amp_ctx:
-            with __grad_ctx:
-                yield
+            __context.enter_context(torch.amp.autocast(device_type=__device, dtype=__dtype))
+        if not bool(gradient_opt):
+            __context.enter_context(torch.no_grad())
+        return __context
 
     def setup_context(self, context_cfg: dict={}) -> None:
         """Create the autocast context from training config."""
@@ -584,8 +582,9 @@ class BaseRunner:
 
     def step_progress(self, pbar_obj: object) -> None:
         # only work every few steps, after accumulating the loss on a few batches
+        __step_num = int(self._state['scalars'].get('step/current', 0))
         __progress_opt = bool(
-            self._state['scalars'].get('switch/progress', 0)
+            self._trigger_progress(step_num=__step_num)
             or self._state['scalars'].get('switch/grad', 0))
         if __progress_opt:
             # aggregate and format
@@ -616,6 +615,22 @@ class PrefixTrainer(BaseRunner):
 
 class PrefixTester(BaseRunner):
     """Prefix runner for evaluation/benchmark phases without parameter updates."""
+
+    def setup_global(
+        self,
+        context_cfg: dict={},
+        optimizer_cfg: dict={},
+        scaler_cfg: dict={},
+        overwrite_opt: bool=False,
+    ) -> None:
+        if overwrite_opt or (not self._check_config(self._config.get('context', {}), ('device', 'dtype'))):
+            self.setup_context(context_cfg=context_cfg)
+        if overwrite_opt or (not self._check_config(self._config.get('optimizer', {}), ('lr',))):
+            if self._check_config(optimizer_cfg, ('lr',)):
+                self._config['optimizer'] = optimizer_cfg
+        if overwrite_opt or (not self._check_config(self._config.get('scaler', {}), ('enabled',))):
+            if self._check_config(scaler_cfg, ('enabled',)):
+                self._config['scaler'] = scaler_cfg
 
     def step_forward(self) -> None:
         __hidden = self._use_hidden_outputs()
