@@ -81,7 +81,6 @@ class BaseRunner:
         self._teacher = teacher_mod
         self._student = student_mod
         # training utilities (populated by setup_* methods, not the constructor)
-        self._context = None
         self._optimizer = None
         self._scaler = None
         # current phase attributes (set by setup_phase)
@@ -153,29 +152,33 @@ class BaseRunner:
 
     def _check_setup(self) -> None:
         """Raise AssertionError if the trainer is not ready to run a phase."""
-        assert self._context is not None, 'context is None; call setup_global() first.'
         assert self._dataset is not None, 'dataset is None; call setup_phase() first.'
-        self._check_runtime_setup()
+        self._check_runtime()
 
-    def _check_runtime_setup(self) -> None:
+    def _check_runtime(self) -> None:
         """Hook for mode-specific setup checks."""
         pass
 
     # GLOBAL ###################################################################
+
+    @contextlib.contextmanager
+    def _context(self, dtype_obj: object=None, gradient_opt: bool=False) -> object:
+        __context_cfg = self._config.get('context', {})
+        __dtype = __context_cfg.get('dtype', torch.float32) if (dtype_obj is None) else dtype_obj
+        __device = __context_cfg.get('device', 'cpu')
+        __amp_ctx = contextlib.nullcontext()
+        if __dtype != torch.float32:
+            __amp_ctx = torch.amp.autocast(device_type=__device, dtype=__dtype)
+        __grad_ctx = contextlib.nullcontext() if bool(gradient_opt) else torch.no_grad()
+        with __amp_ctx:
+            with __grad_ctx:
+                yield
 
     def setup_context(self, context_cfg: dict={}) -> None:
         """Create the autocast context from training config."""
         if self._check_config(context_cfg, ('device', 'dtype')):
             # save the configuration for import / export
             self._config['context'] = context_cfg
-            # default to a no-op context
-            self._context = contextlib.nullcontext()
-            # use mixed precision otherwise
-            __dtype = context_cfg.get('dtype', torch.float32)
-            if __dtype != torch.float32:
-                self._context = torch.amp.autocast(
-                    device_type=context_cfg.get('device', 'cpu'),
-                    dtype=__dtype)
 
     def setup_optimizer(self, optimizer_cfg: dict={}) -> None:
         """Create the AdamW optimizer from config."""
@@ -203,8 +206,7 @@ class BaseRunner:
         overwrite_opt: bool=False,
     ) -> None:
         """Initialize long-lived utilities: optimizer, scaler, and mixed-precision context."""
-        if overwrite_opt or self._context is None:
-            self._context = None
+        if overwrite_opt or (not self._check_config(self._config.get('context', {}), ('device', 'dtype'))):
             self.setup_context(context_cfg=context_cfg)
         if overwrite_opt or self._optimizer is None:
             self._optimizer = None
@@ -466,53 +468,40 @@ class BaseRunner:
             (float(self._config['loss'].get('mse_k_rate', 0.0)) > 0.0)
             or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0))
 
-    def _grad_context(self, gradient_opt: bool) -> object:
-        return contextlib.nullcontext() if bool(gradient_opt) else torch.no_grad()
-
-    def _teacher_forward(
-        self,
-        hidden_opt: bool,
-        gradient_opt: bool = False,
-    ) -> None:
+    def _teacher_forward(self, hidden_opt: bool, gradient_opt: bool=False) -> None:
         """Teacher forward path with explicit gradient mode."""
-        with self._context:
-            with self._grad_context(gradient_opt=gradient_opt):
-                # teacher forward: get original embeddings and hidden states (no grad)
-                self._state['tensors']['outputs/teacher/0'] = _processors.embed(
-                    indices_arr=self._state['tensors']['inputs/indices'],
+        with self._context(gradient_opt=gradient_opt):
+            # teacher forward: get original embeddings and hidden states (no grad)
+            self._state['tensors']['outputs/teacher/0'] = _processors.embed(
+                indices_arr=self._state['tensors']['inputs/indices'],
+                model_obj=self._teacher)
+            # do not compute the hidden activations by default
+            self._state['tensors']['outputs/teacher/k'] = torch.zeros(
+                tuple(self._state['tensors']['outputs/teacher/0'].shape),
+                dtype=self._state['tensors']['outputs/teacher/0'].dtype,
+                device=self._state['tensors']['outputs/teacher/0'].device)
+            # compute the hidden activations only if they are used in the loss
+            if hidden_opt:
+                self._state['tensors']['outputs/teacher/k'] = _processors.forward(
+                    embeds_arr=self._state['tensors']['outputs/teacher/0'],
+                    mask_arr=self._state['tensors']['inputs/mask'],
                     model_obj=self._teacher)
-                # do not compute the hidden activations by default
-                self._state['tensors']['outputs/teacher/k'] = torch.zeros(
-                    tuple(self._state['tensors']['outputs/teacher/0'].shape),
-                    dtype=self._state['tensors']['outputs/teacher/0'].dtype,
-                    device=self._state['tensors']['outputs/teacher/0'].device)
-                # compute the hidden activations only if they are used in the loss
-                if hidden_opt:
-                    self._state['tensors']['outputs/teacher/k'] = _processors.forward(
-                        embeds_arr=self._state['tensors']['outputs/teacher/0'],
-                        mask_arr=self._state['tensors']['inputs/mask'],
-                        model_obj=self._teacher)
 
-    def _student_forward(
-        self,
-        hidden_opt: bool,
-        gradient_opt: bool = True,
-    ) -> None:
+    def _student_forward(self, hidden_opt: bool, gradient_opt: bool=True) -> None:
         """Student forward path with explicit gradient mode."""
-        with self._context:
-            with self._grad_context(gradient_opt=gradient_opt):
-                self._state['tensors']['outputs/student/0'] = self._student(
-                    self._state['tensors']['inputs/bytes']
-                ).to(dtype=self._state['tensors']['outputs/teacher/0'].dtype)
-                self._state['tensors']['outputs/student/k'] = torch.zeros(
-                    tuple(self._state['tensors']['outputs/student/0'].shape),
-                    dtype=self._state['tensors']['outputs/student/0'].dtype,
-                    device=self._state['tensors']['outputs/student/0'].device)
-                if hidden_opt:
-                    self._state['tensors']['outputs/student/k'] = _processors.forward(
-                        embeds_arr=self._state['tensors']['outputs/student/0'],
-                        mask_arr=self._state['tensors']['inputs/mask'],
-                        model_obj=self._teacher)
+        with self._context(gradient_opt=gradient_opt):
+            self._state['tensors']['outputs/student/0'] = self._student(
+                self._state['tensors']['inputs/bytes']
+            ).to(dtype=self._state['tensors']['outputs/teacher/0'].dtype)
+            self._state['tensors']['outputs/student/k'] = torch.zeros(
+                tuple(self._state['tensors']['outputs/student/0'].shape),
+                dtype=self._state['tensors']['outputs/student/0'].dtype,
+                device=self._state['tensors']['outputs/student/0'].device)
+            if hidden_opt:
+                self._state['tensors']['outputs/student/k'] = _processors.forward(
+                    embeds_arr=self._state['tensors']['outputs/student/0'],
+                    mask_arr=self._state['tensors']['inputs/mask'],
+                    model_obj=self._teacher)
 
     def step_forward(self) -> None:
         raise NotImplementedError('Subclasses of BaseRunner must implement step_forward().')
@@ -608,7 +597,7 @@ class BaseRunner:
 class PrefixTrainer(BaseRunner):
     """Prefix runner with gradient-based optimization behavior."""
 
-    def _check_runtime_setup(self) -> None:
+    def _check_runtime(self) -> None:
         assert self._optimizer is not None, 'optimizer is None; call setup_global() first.'
         assert self._scaler is not None, 'scaler is None; call setup_global() first.'
         assert self._scheduler is not None, 'scheduler is None; call setup_phase() first.'

@@ -17,7 +17,6 @@ Covers:
 - setup_phase: updates active config, stores phase dataset/column/epoch, rebuilds scheduler and callbacks.
 """
 
-import contextlib
 import types
 import unittest.mock
 
@@ -91,7 +90,7 @@ def _make_trainer(
     """Build a PrefixTrainer with test-friendly stubs.
 
     The trainer is constructed without configs.
-    _config, _optimizer, _scaler, and _context are then set directly so that
+    _config, _optimizer, and _scaler are then set directly so that
     existing tests for step_*, close_step, run_epoch, and run_phase continue
     to work without calling setup_global().
     """
@@ -117,7 +116,6 @@ def _make_trainer(
     # inject test-friendly utilities directly (bypass setup_global for existing tests)
     __t._optimizer = torch.optim.SGD([__param], lr=1e-3)
     __t._scaler = _make_mock_scaler()
-    __t._context = contextlib.nullcontext()
 
     if callbacks_arr is not None:
         import deformers.pipelines.prefix.callbacks as _cb
@@ -146,7 +144,6 @@ def _make_tester(
         teacher_mod=unittest.mock.MagicMock(),
         student_mod=unittest.mock.MagicMock(),)
     __t._config = {__k: dict(__v) for (__k, __v) in cfg.items()}
-    __t._context = contextlib.nullcontext()
     return __t
 
 
@@ -937,7 +934,7 @@ class TestSetupGlobal:
     def test_creates_context(self):
         __t = self._make_base_trainer()
         self._setup_global(__t)
-        assert __t._context is not None
+        assert __t._config['context'] == {'dtype': torch.float32, 'device': 'cpu'}
 
     def test_preserves_optimizer_across_calls(self):
         """Calling setup_global() twice should not recreate the optimizer."""
