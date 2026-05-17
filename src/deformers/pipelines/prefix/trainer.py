@@ -163,9 +163,9 @@ class BaseRunner:
 
     def _context(self, dtype_obj: object=None, gradient_opt: bool=False) -> object:
         __context = contextlib.ExitStack()
-        __context_cfg = self._config.get('context', {})
-        __dtype = __context_cfg.get('dtype', torch.float32) if (dtype_obj is None) else dtype_obj
-        __device = __context_cfg.get('device', 'cpu')
+        __config = self._config.get('context', {})
+        __dtype = __config.get('dtype', torch.float32) if (dtype_obj is None) else dtype_obj
+        __device = __config.get('device', 'cpu')
         if __dtype != torch.float32:
             __context.enter_context(torch.amp.autocast(device_type=__device, dtype=__dtype))
         if not bool(gradient_opt):
@@ -204,14 +204,15 @@ class BaseRunner:
         overwrite_opt: bool=False,
     ) -> None:
         """Initialize long-lived utilities: optimizer, scaler, and mixed-precision context."""
-        if overwrite_opt or (not self._check_config(self._config.get('context', {}), ('device', 'dtype'))):
-            self.setup_context(context_cfg=context_cfg)
+        # create the persistent objects
         if overwrite_opt or self._optimizer is None:
             self._optimizer = None
             self.setup_optimizer(optimizer_cfg=optimizer_cfg)
         if overwrite_opt or self._scaler is None:
             self._scaler = None
             self.setup_scaler(scaler_cfg=scaler_cfg)
+        # no fixed object, the context is created on each invocation of `BaseRunner._context(...)`
+        self.setup_context(context_cfg=context_cfg)
 
     # PHASE ####################################################################
 
@@ -369,21 +370,7 @@ class BaseRunner:
         """Terminate the temporary state of the epoch."""
         pbar_obj.close()
 
-    # STEP #####################################################################
-
-    def init_step(self, step_num: int) -> None:
-        """Update counters and step switches."""
-        __step_num = int(step_num) + 1
-        # step/global is a monotonically increasing counter that persists across epochs and phases
-        self._state['scalars']['step/global'] += 1
-        self._state['scalars']['step/current'] = __step_num
-        # tracks the operation that (will) run on the current step
-        self._state['scalars']['switch/train'] = int(self._trigger_train(step_num=__step_num))
-        self._state['scalars']['switch/log'] = int(self._trigger_log(step_num=__step_num))
-        self._state['scalars']['switch/save'] = int(self._trigger_save(step_num=__step_num))
-        self._state['scalars']['switch/grad'] = int(self._trigger_update(step_num=__step_num))
-        self._state['scalars']['switch/progress'] = int(self._trigger_progress(step_num=__step_num))
-        self._state['scalars']['switch/cleanup'] = int(self._trigger_cleanup(step_num=__step_num))
+    # SWITCH ###################################################################
 
     def _trigger_train(self, step_num: int) -> bool:
         __every = int(self._config['testing'].get('every_num', 0))
@@ -406,6 +393,27 @@ class BaseRunner:
 
     def _trigger_cleanup(self, step_num: int) -> bool:
         return self._trigger_update(step_num=step_num)
+
+    def _trigger_hidden(self) -> bool:
+        return (
+            (float(self._config['loss'].get('mse_k_rate', 0.0)) > 0.0)
+            or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0))
+
+    # STEP #####################################################################
+
+    def init_step(self, step_num: int) -> None:
+        """Update counters and step switches."""
+        __step_num = int(step_num) + 1
+        # step/global is a monotonically increasing counter that persists across epochs and phases
+        self._state['scalars']['step/global'] += 1
+        self._state['scalars']['step/current'] = __step_num
+        # tracks the operation that (will) run on the current step
+        self._state['scalars']['switch/train'] = int(self._trigger_train(step_num=__step_num))
+        self._state['scalars']['switch/log'] = int(self._trigger_log(step_num=__step_num))
+        self._state['scalars']['switch/save'] = int(self._trigger_save(step_num=__step_num))
+        self._state['scalars']['switch/grad'] = int(self._trigger_update(step_num=__step_num))
+        self._state['scalars']['switch/progress'] = int(self._trigger_progress(step_num=__step_num))
+        self._state['scalars']['switch/cleanup'] = int(self._trigger_cleanup(step_num=__step_num))
 
     def run_step(
         self,
@@ -460,11 +468,6 @@ class BaseRunner:
         self._state['tensors']['inputs/bytes'] = __tensors[2]
 
     # FORWARD ##################################################################
-
-    def _use_hidden_outputs(self) -> bool:
-        return (
-            (float(self._config['loss'].get('mse_k_rate', 0.0)) > 0.0)
-            or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0))
 
     def _teacher_forward(self, hidden_opt: bool, gradient_opt: bool=False) -> None:
         """Teacher forward path with explicit gradient mode."""
@@ -592,6 +595,7 @@ class BaseRunner:
             # filter the epoch and step since they are already in the pbar
             pbar_obj.set_postfix({__k: __v for (__k, __v) in __stats.items() if (__k not in ['epoch', 'step'])})
 
+# TRAINER ######################################################################
 
 class PrefixTrainer(BaseRunner):
     """Prefix runner with gradient-based optimization behavior."""
@@ -602,7 +606,7 @@ class PrefixTrainer(BaseRunner):
         assert self._scheduler is not None, 'scheduler is None; call setup_phase() first.'
 
     def step_forward(self) -> None:
-        __hidden = self._use_hidden_outputs()
+        __hidden = self._trigger_hidden()
         self._teacher_forward(hidden_opt=__hidden, gradient_opt=False)
         self._student_forward(hidden_opt=__hidden, gradient_opt=True)
 
@@ -612,6 +616,7 @@ class PrefixTrainer(BaseRunner):
             self.step_backward()
             self.step_optimizer()
 
+# TESTER #######################################################################
 
 class PrefixTester(BaseRunner):
     """Prefix runner for evaluation/benchmark phases without parameter updates."""
@@ -623,17 +628,15 @@ class PrefixTester(BaseRunner):
         scaler_cfg: dict={},
         overwrite_opt: bool=False,
     ) -> None:
-        if overwrite_opt or (not self._check_config(self._config.get('context', {}), ('device', 'dtype'))):
-            self.setup_context(context_cfg=context_cfg)
-        if overwrite_opt or (not self._check_config(self._config.get('optimizer', {}), ('lr',))):
-            if self._check_config(optimizer_cfg, ('lr',)):
-                self._config['optimizer'] = optimizer_cfg
-        if overwrite_opt or (not self._check_config(self._config.get('scaler', {}), ('enabled',))):
-            if self._check_config(scaler_cfg, ('enabled',)):
-                self._config['scaler'] = scaler_cfg
+        if self._check_config(context_cfg, ('device', 'dtype')):
+            self._config['context'] = context_cfg
+        if self._check_config(optimizer_cfg, ('lr',)):
+            self._config['optimizer'] = optimizer_cfg
+        if self._check_config(scaler_cfg, ('enabled',)):
+            self._config['scaler'] = scaler_cfg
 
     def step_forward(self) -> None:
-        __hidden = self._use_hidden_outputs()
+        __hidden = self._trigger_hidden()
         self._teacher_forward(hidden_opt=__hidden, gradient_opt=False)
         self._student_forward(hidden_opt=__hidden, gradient_opt=False)
 
