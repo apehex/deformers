@@ -436,3 +436,163 @@ Not required for prefix/suffix patching pipeline.
 - optimal loss weighting between embedding MSE and hidden-state MSE
 - stability of frozen-trunk distillation
 - does a wider MLP intermediate dimension improve prefix quality?
+
+---
+
+# Phase 6 - Mechanistic Safety Patching (Experimental)
+
+Objective: study refusal, authority attribution, template anchoring, and cross-model latent transfer through the same modular patching framework used for prefix and suffix experiments.
+
+Status: planned.
+
+## Scope
+
+This phase is defensive research. It should use open-weight models, harmless proxy tasks, and responsible-disclosure workflows. It must not store live jailbreak payloads, operational bio-risk content, or NDA-covered bounty material.
+
+## Phase 6.0 - Literature and Benchmark Map
+
+- [ ] convert the state-of-the-art references into a reading queue
+- [ ] tag each reference by mechanism:
+  - [ ] activation steering
+  - [ ] refusal direction
+  - [ ] authority / role confusion
+  - [ ] prompt compression
+  - [ ] latent inversion
+  - [ ] cross-model transfer
+- [ ] define safe proxy tasks for:
+  - [ ] refusal precision
+  - [ ] over-refusal
+  - [ ] instruction hierarchy
+  - [ ] role confusion
+  - [ ] prompt-injection resistance
+  - [ ] utility retention
+- [ ] implement a benchmark registry under `src/deformers/evals/`
+- [ ] document dataset safety filters and excluded content classes
+
+## Phase 6.1 - Instrumentation
+
+- [ ] add hooks for residual stream capture at each layer
+- [ ] add hooks for attention outputs and MLP outputs
+- [ ] add optional KV-cache capture
+- [ ] standardize layer / token-position conventions
+- [ ] implement activation patching utilities
+- [ ] implement diff-in-means vector extraction
+- [ ] implement low-rank direction extraction with SVD
+- [ ] implement projection, ablation, and addition interventions
+- [ ] add masked metrics for variable-length prompts
+- [ ] add artifact logging for directions, probes, and evaluation summaries
+
+## Phase 6.2 - Refusal Geometry
+
+- [ ] reproduce a benign version of the refusal-direction setup on open-weight chat models
+- [ ] extract single refusal directions by layer and position
+- [ ] compare harmful-proxy / harmless contrast pairs without operational dangerous content
+- [ ] measure refusal precision and over-refusal
+- [ ] compare:
+  - [ ] single vector
+  - [ ] multi-vector / low-rank subspace
+  - [ ] SAE feature targeting
+  - [ ] attention-head or MLP-feature localization
+- [ ] measure side effects:
+  - [ ] utility loss
+  - [ ] fluency degradation
+  - [ ] hallucination rate
+  - [ ] instruction-following degradation
+- [ ] test whether refusal changes are stable across paraphrases and chat templates
+
+## Phase 6.3 - Authority and Instruction Hierarchy Geometry
+
+- [ ] build benign system/developer/user/tool hierarchy tasks
+- [ ] construct contrastive pairs that differ only in role, priority, or source
+- [ ] separate explicit role-token effects from wording, position, and style effects
+- [ ] train probes for inferred speaker role and authority level
+- [ ] test whether spoofed low-priority content activates higher-priority role features
+- [ ] extract candidate authority directions or subspaces
+- [ ] test whether authority features are:
+  - [ ] local to template tokens
+  - [ ] propagated into later user-token states
+  - [ ] recoverable after special-token filtering
+  - [ ] entangled with authoritative writing style
+- [ ] evaluate mitigation ideas:
+  - [ ] stronger segment embeddings
+  - [ ] explicit privilege features
+  - [ ] role-confusion detectors
+  - [ ] template-anchoring reduction
+
+## Phase 6.4 - Template Filtering, Latent Inversion, and Prompt Compression
+
+- [ ] test whether hidden states remain invertible after removing special-token positions
+- [ ] compare full hidden-state inversion against projected / position-dropped inversion
+- [ ] train a small decoder or VAE to reconstruct safe template structure from hidden states
+- [ ] evaluate latent prompt carriers:
+  - [ ] soft prompts
+  - [ ] learned control tokens
+  - [ ] system vectors
+  - [ ] prefix patches
+  - [ ] KV-cache memories
+- [ ] measure:
+  - [ ] reconstruction accuracy
+  - [ ] behavior preservation
+  - [ ] prompt leakage
+  - [ ] utility retention
+  - [ ] whether the latent state is reachable from discrete text
+
+## Phase 6.5 - Cross-Model Latent Translation
+
+- [ ] choose a source / target open-model pair
+- [ ] collect a paired hidden-state corpus with identical prompts
+- [ ] train baseline mappings:
+  - [ ] mean / scale calibration
+  - [ ] orthogonal Procrustes
+  - [ ] affine least-squares map
+  - [ ] CCA baseline
+- [ ] compare richer mappings:
+  - [ ] model stitching
+  - [ ] shared sparse autoencoder dictionary
+  - [ ] crosscoder
+  - [ ] KV-cache alignment adapter
+- [ ] transfer:
+  - [ ] probes
+  - [ ] refusal directions
+  - [ ] authority directions
+  - [ ] steering vectors
+  - [ ] soft prompts
+- [ ] report:
+  - [ ] representation reconstruction error
+  - [ ] behavior transfer score
+  - [ ] off-target degradation
+  - [ ] model-family sensitivity
+  - [ ] failure cases
+
+## Phase 6.6 - Defensive Outputs
+
+- [ ] write concise mechanism reports for each experiment
+- [ ] produce safe reproductions with harmless proxy prompts
+- [ ] create mitigation notes for:
+  - [ ] refusal brittleness
+  - [ ] template anchoring
+  - [ ] role confusion
+  - [ ] non-surjective latent interventions
+  - [ ] cross-model transfer failure modes
+- [ ] prepare private responsible-disclosure templates for authorized programs
+- [ ] keep public artifacts free of exploit payloads and operationally harmful content
+
+## Success Criteria
+
+This phase is successful if the project can:
+
+- localize at least one safety-relevant behavior to measurable hidden-state features
+- distinguish causal interventions from correlational probes
+- preserve utility while changing a targeted benign proxy behavior
+- explain when an intervention does or does not transfer between two open models
+- document a safe, reproducible workflow for mechanistic safety research
+
+## Open Questions
+
+- is authority a direction, a subspace, a set of sparse features, or a cache-level state?
+- can role confusion be detected before generation?
+- how much system-prompt behavior survives special-token filtering?
+- when does prompt compression preserve behavior without leaking the raw prompt?
+- which safety features are shared across model families?
+- which latent interventions are unreachable by ordinary text prompts?
+- can prefix patches emulate special-token behavior while keeping tokenizer boundaries fixed?

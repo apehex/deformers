@@ -14,6 +14,7 @@ Overview of the repository structure.
 | `   -- invariants.md`     | Hard constraints                      |
 | `   -- references.md`     | External references                   |
 | `   -- roadmap.md`        | Planning of the project               |
+| `   -- sota.md`   | Mechanistic safety research synthesis |
 
 ## Logs
 

@@ -196,3 +196,70 @@ Rationale: including padding positions would dilute the loss and distort gradien
 - no-norm variant: removing normalization entirely is a valid ablation; rely on initialization and learning rate instead
 
 Rationale: keeps the layout consistent with HuggingFace transformer conventions and avoids silent shape errors from channel-first vs channel-last mismatch.
+
+---
+
+## Mechanistic Safety Research Scope
+
+Decision: add a defensive mechanistic-safety research axis without changing the core patching invariants.
+
+The project can study refusal, authority attribution, instruction hierarchy, latent prompt compression, and cross-model transfer, but only through controlled open-weight experiments and benign proxy tasks.
+
+Rationale:
+
+- these behaviors are naturally expressed through prefix / trunk / suffix interfaces
+- activation steering and representation engineering expose patchable latent mechanisms
+- hidden-state matching and distillation are already central to the project
+- cross-model latent translation is a direct extension of modular interface alignment
+
+Safety boundary:
+
+- do not store live jailbreak payloads in the repository
+- do not include operational bio-risk content in datasets, logs, or docs
+- use harmless proxies for dangerous benchmark categories
+- keep NDA-covered bounty data out of the public project
+- report vulnerabilities through authorized disclosure channels only
+
+## Authority and Refusal Are Not Assumed to Be Single Vectors
+
+Decision: treat refusal and authority as empirical objects, not as predefined one-dimensional variables.
+
+Working assumptions:
+
+- a shared refusal core may exist
+- refusal style and refusal cause may be represented by distinct features
+- authority may be entangled with role tokens, position, style, social priors, and chat-template structure
+- template tokens can influence later hidden states, but removing their positions makes inversion lossy and possibly underdetermined
+- white-box activation edits may not have exact discrete-prompt equivalents
+
+Implications:
+
+- measure multiple layers and positions
+- compare single-vector, low-rank, SAE-feature, and KV-cache interventions
+- report side effects and utility loss
+- test whether effects survive paraphrase, template changes, and model transfer
+
+## Cross-Model Transfer Policy
+
+Decision: use cross-model transfer as a measured alignment problem.
+
+Preferred methods, from simplest to most expressive:
+
+1. paired hidden-state affine maps
+2. orthogonal Procrustes or CCA baselines
+3. model stitching maps between residual streams
+4. shared sparse autoencoder dictionaries
+5. crosscoders for model-diffing
+6. KV-cache alignment adapters
+7. soft-prompt transfer through distillation
+
+Every transfer experiment should report:
+
+- source and target model
+- source and target layer
+- alignment dataset
+- map family
+- reconstruction error
+- behavior transfer score
+- utility retention
+- failure cases
