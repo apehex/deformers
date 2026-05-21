@@ -446,18 +446,53 @@ class TestPrefixTesterStepForward:
         __t.step_forward()
         assert __grad_enabled == [False]
 
+    def test_populates_logits_when_enabled(self, monkeypatch):
+        __t = _make_tester()
+        __t._config['testing'].update({'hidden_opt': True, 'logits_opt': True})
+        __t._state['tensors']['inputs/mask'] = torch.ones(2, 4)
+        __t._state['tensors']['inputs/indices'] = torch.zeros(2, 4, dtype=torch.long)
+        __t._state['tensors']['inputs/bytes'] = torch.zeros(2, 4, 2, dtype=torch.long)
+
+        monkeypatch.setattr(
+            'deformers.pipelines.prefix.processors.embed',
+            lambda **kwargs: torch.randn(2, 4, 8))
+        monkeypatch.setattr(
+            'deformers.pipelines.prefix.processors.forward',
+            lambda **kwargs: torch.randn(2, 4, 8))
+
+        __t._student = lambda inputs: torch.randn(2, 4, 8)
+        __t._teacher.lm_head = lambda inputs: inputs + 1.0
+
+        __t.step_forward()
+        assert 'outputs/teacher/logits' in __t._state['tensors']
+        assert 'outputs/student/logits' in __t._state['tensors']
+
 
 class TestPrefixTesterObjective:
 
-    def test_calls_step_losses_only(self):
+    def test_calls_step_losses_and_metrics(self):
         __t = _make_tester()
         __t.step_losses = unittest.mock.MagicMock()
-        __t.step_backward = unittest.mock.MagicMock()
-        __t.step_optimizer = unittest.mock.MagicMock()
+        __t.step_metrics = unittest.mock.MagicMock()
         __t.step_objective()
         __t.step_losses.assert_called_once()
-        __t.step_backward.assert_not_called()
-        __t.step_optimizer.assert_not_called()
+        __t.step_metrics.assert_called_once()
+
+    def test_accumulates_metrics(self):
+        __t = _make_tester()
+        __t._config['testing'].update({'logits_opt': True, 'topk_num': 2})
+        __t._state['tensors']['outputs/teacher/0'] = torch.ones(1, 1, 2)
+        __t._state['tensors']['outputs/student/0'] = torch.zeros(1, 1, 2)
+        __t._state['tensors']['outputs/teacher/k'] = torch.ones(1, 1, 2)
+        __t._state['tensors']['outputs/student/k'] = torch.zeros(1, 1, 2)
+        __t._state['tensors']['outputs/teacher/logits'] = torch.tensor([[[2.0, 1.0, 0.0]]])
+        __t._state['tensors']['outputs/student/logits'] = torch.tensor([[[2.0, 1.0, 0.0]]])
+        __t.step_metrics()
+        assert __t._state['scalars']['metric/count'] == 1
+        assert __t._state['scalars']['metric/embed_mse'] > 0.0
+        assert __t._state['scalars']['metric/hidden_mse'] > 0.0
+        assert abs(__t._state['scalars']['metric/kl']) < 1e-5
+        assert __t._state['scalars']['metric/topk'] == 1.0
 
 
 class TestRunnerTriggers:
