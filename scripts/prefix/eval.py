@@ -15,13 +15,14 @@ import huggingface_hub
 import torch
 import transformers
 
+import mlable.losses
+import mlable.metrics
 import mlable.models
 
 import deformers.datasets.generic
 import deformers.models.generic
 import deformers.models.prefix
 import deformers.pipelines.eval
-import deformers.pipelines.prefix.processors
 import deformers.pipelines.prefix.trainer
 import deformers.tokenizers.byte
 
@@ -154,10 +155,10 @@ def summarize_metrics(state: dict) -> None:
         return
     print('\n[eval] === summary metrics ===')
     print(f'[eval] batches evaluated : {__count}')
-    print(f'[eval] embed MSE         : {__scalars["metric/embed_mse"] / __count:.6f}')
-    print(f'[eval] hidden MSE        : {__scalars["metric/hidden_mse"] / __count:.6f}')
-    print(f'[eval] KL divergence     : {__scalars["metric/kl"] / __count:.6f}')
-    print(f'[eval] top-k match       : {__scalars["metric/topk"] / __count:.4f} (k={TESTING_CFG["topk_num"]})')
+    print(f'[eval] embed MSE         : {__scalars["metrics/mse/0"] / __count:.6f}')
+    print(f'[eval] hidden MSE        : {__scalars["metrics/mse/k"] / __count:.6f}')
+    print(f'[eval] KL divergence     : {__scalars["metrics/kld/k"] / __count:.6f}')
+    print(f'[eval] top-k match       : {__scalars["metrics/topk/k"] / __count:.4f} (k={TESTING_CFG["topk_num"]})')
 
 def forward_probe(
     runner_obj: deformers.pipelines.prefix.trainer.PrefixTester,
@@ -309,12 +310,14 @@ if PROBE_CFG['vocab_opt']:
     __hidden_mse = torch.nn.functional.mse_loss(
         __probe['outputs/teacher/k'].float(),
         __probe['outputs/student/k'].float())
-    __kl = deformers.pipelines.prefix.processors.kl_divergence(
-        teacher_arr=__probe['outputs/teacher/logits'],
-        student_arr=__probe['outputs/student/logits'])
-    __topk = deformers.pipelines.prefix.processors.topk_rate(
-        teacher_arr=__probe['outputs/teacher/logits'],
-        student_arr=__probe['outputs/student/logits'],
+    __kl = mlable.losses.kl_div(
+        predict_arr=__probe['outputs/student/logits'].float(),
+        target_arr=__probe['outputs/teacher/logits'].float(),
+        reduce_opt=True)
+    __topk = mlable.metrics.topk_rate(
+        predict_arr=__probe['outputs/student/logits'],
+        target_arr=__probe['outputs/teacher/logits'],
+        reduce_opt=True,
         k_num=TESTING_CFG['topk_num'])
     print(f'[eval] vocab embed MSE   : {float(__embed_mse.item()):.6f}')
     print(f'[eval] vocab hidden MSE  : {float(__hidden_mse.item()):.6f}')

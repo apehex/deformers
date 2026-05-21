@@ -489,10 +489,10 @@ class TestPrefixTesterObjective:
         __t._state['tensors']['outputs/student/logits'] = torch.tensor([[[2.0, 1.0, 0.0]]])
         __t.step_metrics()
         assert __t._state['scalars']['metric/count'] == 1
-        assert __t._state['scalars']['metric/embed_mse'] > 0.0
-        assert __t._state['scalars']['metric/hidden_mse'] > 0.0
-        assert abs(__t._state['scalars']['metric/kl']) < 1e-5
-        assert __t._state['scalars']['metric/topk'] == 1.0
+        assert __t._state['scalars']['metrics/mse/0'] > 0.0
+        assert __t._state['scalars']['metrics/mse/k'] > 0.0
+        assert abs(__t._state['scalars']['metrics/kld/k']) < 1e-5
+        assert __t._state['scalars']['metrics/topk/k'] == 1.0
 
 
 class TestRunnerTriggers:

@@ -31,6 +31,8 @@ import torch.optim
 import tqdm
 
 import mlable.models
+import mlable.metrics
+import mlable.losses
 import mlable.schedulers
 import mlable.utils
 
@@ -140,10 +142,10 @@ class BaseRunner:
                     'loss/cos/0': 0.0,
                     'loss/cos/k': 0.0,
                     'metric/count': 0,
-                    'metric/embed_mse': 0.0,
-                    'metric/hidden_mse': 0.0,
-                    'metric/kl': 0.0,
-                    'metric/topk': 0.0,
+                    'metrics/mse/0': 0.0,
+                    'metrics/mse/k': 0.0,
+                    'metrics/kld/k': 0.0,
+                    'metrics/topk/k': 0.0,
                     'vocab/seen': 0.0,
                     'vocab/min': 0,
                     'vocab/max': 0,},
@@ -657,25 +659,34 @@ class PrefixTester(BaseRunner):
                 self._state['tensors']['outputs/student/k'])
 
     def step_metrics(self) -> None:
-        __embed_mse = torch.nn.functional.mse_loss(
-            self._state['tensors']['outputs/teacher/0'].float(),
-            self._state['tensors']['outputs/student/0'].float())
-        __hidden_mse = torch.nn.functional.mse_loss(
-            self._state['tensors']['outputs/teacher/k'].float(),
-            self._state['tensors']['outputs/student/k'].float())
+        __embed_mse = mlable.losses.mse_loss(
+            predict_arr=self._state['tensors']['outputs/student/0'].float(),
+            target_arr=self._state['tensors']['outputs/teacher/0'].float(),
+            reduce_opt=True)
+        __hidden_mse = mlable.losses.mse_loss(
+            predict_arr=self._state['tensors']['outputs/student/k'].float(),
+            target_arr=self._state['tensors']['outputs/teacher/k'].float(),
+            reduce_opt=True)
         __kl = torch.tensor(0.0, device=__embed_mse.device)
         __topk = torch.tensor(0.0, device=__embed_mse.device)
         if self._trigger_logits():
             __k = int(self._config['testing'].get('topk_num', 10))
             __teacher_logits = self._state['tensors']['outputs/teacher/logits']
             __student_logits = self._state['tensors']['outputs/student/logits']
-            __kl = _processors.kl_divergence(teacher_arr=__teacher_logits, student_arr=__student_logits)
-            __topk = _processors.topk_rate(teacher_arr=__teacher_logits, student_arr=__student_logits, k_num=__k)
+            __kl = mlable.losses.kl_div(
+                predict_arr=__student_logits.float(),
+                target_arr=__teacher_logits.float(),
+                reduce_opt=True)
+            __topk = mlable.metrics.topk_rate(
+                predict_arr=__student_logits,
+                target_arr=__teacher_logits,
+                reduce_opt=True,
+                k_num=__k)
         self._state['scalars']['metric/count'] += 1
-        self._state['scalars']['metric/embed_mse'] += float(__embed_mse.item())
-        self._state['scalars']['metric/hidden_mse'] += float(__hidden_mse.item())
-        self._state['scalars']['metric/kl'] += float(__kl.item())
-        self._state['scalars']['metric/topk'] += float(__topk.item())
+        self._state['scalars']['metrics/mse/0'] += float(__embed_mse.item())
+        self._state['scalars']['metrics/mse/k'] += float(__hidden_mse.item())
+        self._state['scalars']['metrics/kld/k'] += float(__kl.item())
+        self._state['scalars']['metrics/topk/k'] += float(__topk.item())
 
     def step_objective(self) -> None:
         self.step_losses()
