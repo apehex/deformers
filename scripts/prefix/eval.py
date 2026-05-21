@@ -146,6 +146,7 @@ class BoundedDataset:
 # UTILS ########################################################################
 
 def summarize_metrics(state: dict) -> None:
+    """Print averaged evaluation metrics from `state['scalars']`."""
     __scalars = state['scalars']
     __count = int(__scalars.get('metric/count', 0))
     if __count < 1:
@@ -163,9 +164,12 @@ def forward_probe(
     batch_arr: dict,
     column_str: str,
 ) -> dict:
+    """Run one probe batch and return detached tensors, clearing runner tensor state afterwards."""
     runner_obj.step_batch(batch_arr=batch_arr, column_str=column_str)
     runner_obj.step_forward()
-    __outputs = {__k: __v for (__k, __v) in runner_obj._state['tensors'].items()}
+    __outputs = {
+        __k: (__v.detach().clone() if torch.is_tensor(__v) else __v)
+        for (__k, __v) in runner_obj._state['tensors'].items()}
     runner_obj._state['tensors'] = {}
     return __outputs
 
@@ -187,7 +191,7 @@ DATASET_OBJ = BoundedDataset(
 
 print('[init] loading the tokenizers...')
 TEXT_TOK = transformers.AutoTokenizer.from_pretrained(**TOKEN_CFG)
-TEXT_TOK.pad_token = TEXT_TOK.eos_token if not bool(TEXT_TOK.pad_token) else TEXT_TOK.pad_token
+TEXT_TOK.pad_token = TEXT_TOK.pad_token or TEXT_TOK.eos_token
 BYTE_TOK = deformers.tokenizers.byte.ByteTokenizer(**BYTE_CFG)
 
 # MODELS #######################################################################
@@ -271,7 +275,12 @@ if PROBE_CFG['sentences']:
     __teacher_logits = __probe['outputs/teacher/logits']
     __student_logits = __probe['outputs/student/logits']
     for __i, __sentence in enumerate(PROBE_CFG['sentences']):
-        __pos = max(0, int(__mask[__i].sum().item()) - 1)
+        __len = int(__mask[__i].sum().item())
+        if __len < 1:
+            print(f'[eval] sentence {__i}: "{__sentence[:60]}"')
+            print('[eval] skipped: empty tokenized sentence.')
+            continue
+        __pos = __len - 1
         __teacher_top = __teacher_logits[__i, __pos].topk(__k).indices.tolist()
         __student_top = __student_logits[__i, __pos].topk(__k).indices.tolist()
         print(f'[eval] sentence {__i}: "{__sentence[:60]}"')

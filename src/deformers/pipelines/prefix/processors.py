@@ -159,6 +159,7 @@ def kl_divergence(
     teacher_arr: torch.Tensor,
     student_arr: torch.Tensor,
 ) -> torch.Tensor:
+    """Compute KL(student || teacher) using log-softmax/softmax and batchmean reduction."""
     return torch.nn.functional.kl_div(
         input=torch.nn.functional.log_softmax(student_arr.float(), dim=-1),
         target=torch.nn.functional.softmax(teacher_arr.float(), dim=-1),
@@ -169,6 +170,7 @@ def topk_rate(
     student_arr: torch.Tensor,
     k_num: int=10,
 ) -> torch.Tensor:
+    """Return mean exact top-k position match rate; `k_num` is clamped to at least 1."""
     __k = int(max(1, k_num))
     __topk_teacher = teacher_arr.topk(__k, dim=-1).indices
     __topk_student = student_arr.topk(__k, dim=-1).indices
