@@ -1,20 +1,29 @@
-# Index
+# Repository Structure
 
 Overview of the repository structure.
+
+## Agents
+
+| Path                         | Purpose                               |
+| ---------------------------- | ------------------------------------- |
+| `.agents/`                   | Agent-facing repository instructions  |
+| `.agents/AGENTS.md`          | Guidelines for LLM agents             |
+| `.agents/skills/`            | Future reusable agent skills          |
+| `.agents/skills/README.md`   | Skill authoring guidance              |
+| `.agents/skills/TEMPLATE.md` | Template for new skills               |
 
 ## Docs
 
 | Path                      | Purpose                               |
 | ------------------------- | ------------------------------------- |
 | `-- docs/`                |                                       |
-| `   -- agents.md`         | Guidelines for LLM agents             |
 | `   -- context.md`        | Overview of the project               |
 | `   -- decisions.md`      | Record of important design choices    |
-| `   -- index.md`          | Structure of the repository           |
+| `   -- README.md`         | Structure of the repository           |
 | `   -- invariants.md`     | Hard constraints                      |
 | `   -- references.md`     | External references                   |
 | `   -- roadmap.md`        | Planning of the project               |
-| `   -- sota.md`   | Mechanistic safety research synthesis |
+| `   -- sota.md`           | Mechanistic safety research synthesis |
 
 ## Logs
 
