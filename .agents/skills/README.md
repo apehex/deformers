@@ -1,6 +1,6 @@
 # Agent Skills
 
-This directory is reserved for reusable skills that help agents perform recurring work in this repository.
+This directory contains reusable skills that help agents perform recurring work in this repository.
 
 Add a skill when a workflow needs more durable guidance than a one-off note in `docs/`, such as a repeated experiment pattern, evaluation protocol, model-analysis routine, or documentation workflow.
 
@@ -26,3 +26,16 @@ Use `TEMPLATE.md` as the starting point for each `SKILL.md`.
 - Link to stable repository docs instead of duplicating long context.
 - Include scripts or references only when they materially reduce repeated work.
 - Keep examples safe, reproducible, and free of operationally harmful content.
+
+## Current Skills
+
+- `activation-and-latent-interventions`: representation engineering, activation steering, SAE features, vector fields, and causal latent interventions.
+- `authority-and-role-mechanisms`: instruction hierarchy, role confusion, role probes, and authority attribution.
+- `cross-model-transfer-and-universality`: affine maps, model stitching, universal SAEs, crosscoders, and transfer claims.
+- `latent-inversion-and-information-access`: hidden-state invertibility, prompt leakage, refused-knowledge decoding, and activation privacy.
+- `refusal-and-policy-geometry`: refusal directions, multi-feature refusal, over-refusal, and policy geometry.
+- `template-anchoring-and-hidden-policy-carriers`: chat-template anchoring, system vectors, learned tokens, soft prompts, and KV-cache carriers.
+- `universal-attack-hypothesis-generation`: creative mechanism-level hypothesis generation for authorized universal-jailbreak research.
+- `universal-jailbreak-research-protocol`: bounty-facing evaluation, evidence gathering, run sheets, and disclosure workflow.
+
+See `SOURCE_COVERAGE.md` for the mapping from local papers in `references/` to these skills.
