@@ -509,20 +509,21 @@ class BaseRunner:
 
     # LOSS #####################################################################
 
-    def step_losses(self) -> None:
+    def _step_losses(self, gradient_opt: bool=True) -> None:
         """Compute tensor loss and detached scalar metrics for the current batch."""
-        __outputs = _processors.compute_losses(
-            mask_arr=self._state['tensors']['inputs/mask'],
-            student_0_arr=self._state['tensors']['outputs/student/0'],
-            student_k_arr=self._state['tensors']['outputs/student/k'],
-            teacher_0_arr=self._state['tensors']['outputs/teacher/0'],
-            teacher_k_arr=self._state['tensors']['outputs/teacher/k'],
-            step_num=int(self._config['gradient'].get('every_num', 1)),
-            mse_0_rate=float(self._config['loss'].get('mse_0_rate', 1.0)),
-            mse_k_rate=float(self._config['loss'].get('mse_k_rate', 0.0)),
-            cos_0_rate=float(self._config['loss'].get('cos_0_rate', 1.0)),
-            cos_k_rate=float(self._config['loss'].get('cos_k_rate', 0.0)),
-            relative_opt=bool(self._config['loss'].get('relative_opt', True)))
+        with self._context(gradient_opt=gradient_opt):
+            __outputs = _processors.compute_losses(
+                mask_arr=self._state['tensors']['inputs/mask'],
+                student_0_arr=self._state['tensors']['outputs/student/0'],
+                student_k_arr=self._state['tensors']['outputs/student/k'],
+                teacher_0_arr=self._state['tensors']['outputs/teacher/0'],
+                teacher_k_arr=self._state['tensors']['outputs/teacher/k'],
+                step_num=int(self._config['gradient'].get('every_num', 1)),
+                mse_0_rate=float(self._config['loss'].get('mse_0_rate', 1.0)),
+                mse_k_rate=float(self._config['loss'].get('mse_k_rate', 0.0)),
+                cos_0_rate=float(self._config['loss'].get('cos_0_rate', 1.0)),
+                cos_k_rate=float(self._config['loss'].get('cos_k_rate', 0.0)),
+                relative_opt=bool(self._config['loss'].get('relative_opt', True)))
         # the tensor loss is needed for the backward computation
         self._state['tensors']['loss/total'] = __outputs[-1]
         # track the loss components
@@ -534,7 +535,7 @@ class BaseRunner:
 
     def step_objective(self) -> None:
         """Base objective implementation that computes/accumulates losses without backward."""
-        self.step_losses()
+        self._step_losses(gradient_opt=True)
 
     # BACKWARD #################################################################
 
@@ -611,7 +612,7 @@ class PrefixTrainer(BaseRunner):
         self._student_forward(hidden_opt=__hidden, gradient_opt=True)
 
     def step_objective(self) -> None:
-        self.step_losses()
+        self._step_losses(gradient_opt=True)
         if bool(self._state['scalars']['switch/train']):
             self.step_backward()
             self.step_optimizer()
@@ -639,6 +640,9 @@ class PrefixTester(BaseRunner):
         __hidden = self._trigger_hidden()
         self._teacher_forward(hidden_opt=__hidden, gradient_opt=False)
         self._student_forward(hidden_opt=__hidden, gradient_opt=False)
+
+    def step_objective(self) -> None:
+        self._step_losses(gradient_opt=False)
 
     def _trigger_train(self, step_num: int) -> bool:
         return False
