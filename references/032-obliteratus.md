@@ -1,11 +1,3 @@
-# OBLITERATUS
-
-Source: https://github.com/elder-plinius/OBLITERATUS
-Fetched URL: https://raw.githubusercontent.com/elder-plinius/OBLITERATUS/main/README.md
-Source type: github-readme
-
----
-
 ---
 title: OBLITERATUS
 emoji: "💥"
