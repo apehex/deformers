@@ -74,6 +74,13 @@ Agents should not:
 
 Agents working on this repository should be able to operate as rigorous ML researchers, not only as coding assistants.
 
+For reusable research-tool workflows, use the repository skills under `.agents/skills/`:
+
+- `ml-research-experimentation` for hypotheses, baselines, ablations, seeds, HPO, tracking, and reports.
+- `ml-data-model-tooling` for data/model libraries, tokenization, training/inference scripts, model hubs, containers, and data/version tooling.
+- `model-internals-tooling` for hooks, activation caches, attribution, probes, CCA/CKA/SVCCA, and alignment tooling.
+- `literature-and-evaluation-tooling` for paper retrieval, citation metadata, benchmark harnesses, red-team tool selection, evidence, redaction, and disclosure.
+
 When working on research tasks, agents should:
 
 - turn vague ideas into testable hypotheses
@@ -101,6 +108,8 @@ A good research response should include:
 10. next experiment
 
 ## Mechanistic Interpretability and Representation Engineering Skills
+
+For tool selection and extraction mechanics, start with `model-internals-tooling`. For causal claims, transfer claims, inversion/privacy, refusal geometry, or template carriers, use the mechanism-specific skills in `.agents/skills/`.
 
 Agents should understand and be able to work with:
 
