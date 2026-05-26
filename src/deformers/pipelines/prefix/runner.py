@@ -31,6 +31,8 @@ import torch.optim
 import tqdm
 
 import mlable.models
+import mlable.losses
+import mlable.metrics
 import mlable.schedulers
 import mlable.utils
 
@@ -139,9 +141,8 @@ class BaseRunner:
                     'loss/mse/k': 0.0,
                     'loss/cos/0': 0.0,
                     'loss/cos/k': 0.0,
-                    'vocab/seen': 0.0,
-                    'vocab/min': 0,
-                    'vocab/max': 0,},
+                    'test/kld/k': 0.0,
+                    'test/topk/k': 0.0,},
                 **override.get('scalars', {}),},}
 
     # CONFIG ###################################################################
@@ -426,6 +427,7 @@ class BaseRunner:
         self.step_batch(step_num=step_num, batch_arr=batch_arr, column_str=column_str)
         self.step_forward(step_num=step_num)
         self.step_objective(step_num=step_num)
+        self.step_metrics(step_num=step_num)
         self.step_callbacks(step_num=step_num)
 
     def close_step(self, step_num: int) -> None:
@@ -536,6 +538,29 @@ class BaseRunner:
         """Base objective implementation that computes/accumulates losses without backward."""
         self._step_losses(gradient_opt=True)
 
+    # METRICS ##################################################################
+
+    def step_metrics(self, step_num: int) -> None:
+        """Compute triggered test metrics from depth-k activations."""
+        if self._trigger_test(step_num=step_num):
+            __topk_num = int(self._config['testing'].get('topk_num', 10))
+            with self._context(gradient_opt=False):
+                __teacher_logits = self._teacher.lm_head(self._state['tensors']['outputs/teacher/k'])
+                __student_logits = self._teacher.lm_head(self._state['tensors']['outputs/student/k'])
+                __kld = mlable.losses.kl_div(
+                    predict_arr=__teacher_logits,
+                    target_arr=__student_logits,
+                    mask_arr=self._state['tensors']['inputs/mask'],
+                    reduce_opt=True)
+                __topk = mlable.metrics.topk_rate(
+                    predict_arr=__teacher_logits,
+                    target_arr=__student_logits,
+                    mask_arr=self._state['tensors']['inputs/mask'],
+                    reduce_opt=True,
+                    k_num=__topk_num)
+            self._state['scalars']['test/kld/k'] = float(__kld.item())
+            self._state['scalars']['test/topk/k'] = float(__topk.item())
+
     # BACKWARD #################################################################
 
     def _step_backward(self) -> None:
@@ -637,9 +662,6 @@ class PrefixTester(BaseRunner):
 
     def step_objective(self, step_num: int) -> None:
         self._step_losses(gradient_opt=False)
-
-    def _trigger_test(self, step_num: int) -> bool:
-        return True
 
     def _trigger_update(self, step_num: int) -> bool:
         return False

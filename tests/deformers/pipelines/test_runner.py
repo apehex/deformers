@@ -24,6 +24,7 @@ import pytest
 import torch
 import torch.nn
 
+import deformers.pipelines.prefix.callbacks as _callbacks
 import deformers.pipelines.prefix.runner as _runner
 
 # HELPERS ######################################################################
@@ -182,6 +183,19 @@ class TestInitState:
         __s = __t.init_state()['scalars']
         for __k in ['loss/total', 'loss/mse/0', 'loss/mse/k', 'loss/cos/0', 'loss/cos/k']:
             assert __k in __s
+
+    def test_scalars_has_test_metric_keys(self):
+        __t = _make_runner()
+        __s = __t.init_state()['scalars']
+        assert __s['test/kld/k'] == 0.0
+        assert __s['test/topk/k'] == 0.0
+
+    def test_scalars_do_not_have_obsolete_vocab_keys(self):
+        __t = _make_runner()
+        __s = __t.init_state()['scalars']
+        assert 'vocab/seen' not in __s
+        assert 'vocab/min' not in __s
+        assert 'vocab/max' not in __s
 
     def test_override_replaces_scalars(self):
         __t = _make_runner()
@@ -459,9 +473,15 @@ class TestRunnerTriggers:
     def test_prefix_tester_init_step_applies_trigger_switches(self):
         __t = _make_tester(grad_every=2, test_every=3)
         __t.init_step(step_num=1)
+        assert __t._state['scalars']['switch/test'] == 0
         assert __t._state['scalars']['switch/grad'] == 0
         assert __t._state['scalars']['switch/progress'] == 1
         assert __t._state['scalars']['switch/cleanup'] == 1
+
+    def test_prefix_tester_test_trigger_uses_testing_frequency(self):
+        __t = _make_tester(test_every=3)
+        assert not __t._trigger_test(step_num=1)
+        assert __t._trigger_test(step_num=3)
 
     def test_hidden_trigger_follows_test_trigger(self):
         __t = _make_runner(test_every=3)
@@ -543,6 +563,97 @@ class TestStepLosses:
         __t._step_losses()
         # the scalars should be plain floats, not tensors
         assert isinstance(__t._state['scalars']['loss/total'], float)
+
+
+# STEP_METRICS #################################################################
+
+class TestStepMetrics:
+
+    def _setup(self, test_every: int = 1, topk_num: int = 7) -> tuple:
+        __t = _make_runner(test_every=test_every)
+        __t._config['testing']['topk_num'] = topk_num
+        __teacher_k = torch.full((2, 3, 4), 1.0)
+        __student_k = torch.full((2, 3, 4), 2.0)
+        __t._state['tensors']['inputs/mask'] = torch.ones(2, 3)
+        __t._state['tensors']['outputs/teacher/0'] = torch.full((2, 3, 4), -1.0)
+        __t._state['tensors']['outputs/student/0'] = torch.full((2, 3, 4), -2.0)
+        __t._state['tensors']['outputs/teacher/k'] = __teacher_k
+        __t._state['tensors']['outputs/student/k'] = __student_k
+        __teacher_logits = torch.full((2, 3, 5), 3.0)
+        __student_logits = torch.full((2, 3, 5), 4.0)
+        __calls = []
+
+        def __lm_head(activations_arr):
+            __calls.append(activations_arr)
+            return __teacher_logits if torch.equal(activations_arr, __teacher_k) else __student_logits
+
+        __t._teacher.lm_head = __lm_head
+        return __t, __calls, __teacher_k, __student_k, __teacher_logits, __student_logits
+
+    def test_does_nothing_when_test_not_triggered(self, monkeypatch):
+        __t, __calls, _, _, _, _ = self._setup(test_every=2)
+        __t.step_metrics(step_num=1)
+        assert __calls == []
+        assert __t._state['scalars']['test/kld/k'] == 0.0
+        assert __t._state['scalars']['test/topk/k'] == 0.0
+
+    def test_stores_metric_scalars_when_triggered(self, monkeypatch):
+        __t, _, _, _, _, _ = self._setup(test_every=2)
+        monkeypatch.setattr('mlable.losses.kl_div', lambda **kwargs: torch.tensor(1.5))
+        monkeypatch.setattr('mlable.metrics.topk_rate', lambda **kwargs: torch.tensor(0.25))
+        __t.step_metrics(step_num=2)
+        assert __t._state['scalars']['test/kld/k'] == 1.5
+        assert __t._state['scalars']['test/topk/k'] == 0.25
+
+    def test_uses_depth_k_activations_for_logits(self, monkeypatch):
+        __t, __calls, __teacher_k, __student_k, _, _ = self._setup(test_every=1)
+        monkeypatch.setattr('mlable.losses.kl_div', lambda **kwargs: torch.tensor(1.0))
+        monkeypatch.setattr('mlable.metrics.topk_rate', lambda **kwargs: torch.tensor(1.0))
+        __t.step_metrics(step_num=1)
+        assert len(__calls) == 2
+        assert torch.equal(__calls[0], __teacher_k)
+        assert torch.equal(__calls[1], __student_k)
+
+    def test_does_not_store_logits_in_state(self, monkeypatch):
+        __t, _, _, _, _, _ = self._setup(test_every=1)
+        monkeypatch.setattr('mlable.losses.kl_div', lambda **kwargs: torch.tensor(1.0))
+        monkeypatch.setattr('mlable.metrics.topk_rate', lambda **kwargs: torch.tensor(1.0))
+        __t.step_metrics(step_num=1)
+        assert not any('logit' in __key for __key in __t._state['tensors'])
+
+    def test_passes_mask_and_topk_to_mlable_metrics(self, monkeypatch):
+        __t, _, _, _, __teacher_logits, __student_logits = self._setup(test_every=1, topk_num=13)
+        __seen = {}
+
+        def __kl_div(**kwargs):
+            __seen['kl'] = kwargs
+            return torch.tensor(1.0)
+
+        def __topk_rate(**kwargs):
+            __seen['topk'] = kwargs
+            return torch.tensor(1.0)
+
+        monkeypatch.setattr('mlable.losses.kl_div', __kl_div)
+        monkeypatch.setattr('mlable.metrics.topk_rate', __topk_rate)
+        __t.step_metrics(step_num=1)
+        assert __seen['kl']['predict_arr'] is __teacher_logits
+        assert __seen['kl']['target_arr'] is __student_logits
+        assert __seen['kl']['mask_arr'] is __t._state['tensors']['inputs/mask']
+        assert __seen['topk']['predict_arr'] is __teacher_logits
+        assert __seen['topk']['target_arr'] is __student_logits
+        assert __seen['topk']['mask_arr'] is __t._state['tensors']['inputs/mask']
+        assert __seen['topk']['k_num'] == 13
+
+    def test_uses_default_topk_when_not_configured(self, monkeypatch):
+        __t, _, _, _, _, _ = self._setup(test_every=1)
+        __t._config['testing'].pop('topk_num')
+        __seen = {}
+        monkeypatch.setattr('mlable.losses.kl_div', lambda **kwargs: torch.tensor(1.0))
+        monkeypatch.setattr(
+            'mlable.metrics.topk_rate',
+            lambda **kwargs: (__seen.update(kwargs) or torch.tensor(1.0)))
+        __t.step_metrics(step_num=1)
+        assert __seen['k_num'] == 10
 
 
 # STEP_BACKWARD ################################################################
@@ -879,6 +990,29 @@ class TestCallbackStateContract:
         assert __t._state['scalars']['loss/ema'] == 123.0
 
 
+class TestFormatState:
+
+    def test_includes_test_metrics(self):
+        __state = _make_runner().init_state()['scalars']
+        __state['test/kld/k'] = 1.25
+        __state['test/topk/k'] = 0.5
+        __stats = _callbacks.format_state(state=__state)
+        assert 'test' in __stats
+        assert '1.250000' in __stats['test']
+        assert '0.500000' in __stats['test']
+
+    def test_excludes_vocab_group(self):
+        __state = _make_runner().init_state()['scalars']
+        __stats = _callbacks.format_state(state=__state)
+        assert 'vocab' not in __stats
+
+    def test_switch_format_does_not_require_train_switch(self):
+        __state = _make_runner().init_state()['scalars']
+        __state['switch/test'] = 1
+        __stats = _callbacks.format_state(state=__state)
+        assert 'test' in __stats['switch']
+
+
 class TestRunnerLifecycle:
 
     def test_run_step_uses_shared_step_flow(self):
@@ -898,16 +1032,20 @@ class TestRunnerLifecycle:
         def __step_objective(step_num):
             __calls.append('objective')
 
+        def __step_metrics(step_num):
+            __calls.append('metrics')
+
         def __step_callbacks(step_num):
             __calls.append('callbacks')
 
         __runner.step_batch = __step_batch
         __runner.step_forward = __step_forward
         __runner.step_objective = __step_objective
+        __runner.step_metrics = __step_metrics
         __runner.step_callbacks = __step_callbacks
         __batch = {'text': ['x']}
         __runner.run_step(step_num=7, batch_arr=__batch, column_str='text')
-        assert __calls == ['batch', 'forward', 'objective', 'callbacks']
+        assert __calls == ['batch', 'forward', 'objective', 'metrics', 'callbacks']
         assert __step_args == {'step_num': 7, 'batch_arr': __batch, 'column_str': 'text'}
 
 
