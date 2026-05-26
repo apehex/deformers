@@ -117,8 +117,8 @@ class BaseRunner:
             'tensors': override.get('tensors', {}),
             'scalars': {
                 **{
-                    'switch/train': 1,
                     'switch/grad': 0,
+                    'switch/test': 0,
                     'switch/log': 0,
                     'switch/save': 0,
                     'switch/progress': 0,
@@ -372,9 +372,9 @@ class BaseRunner:
 
     # SWITCH ###################################################################
 
-    def _trigger_train(self, step_num: int) -> bool:
+    def _trigger_test(self, step_num: int) -> bool:
         __every = int(self._config['testing'].get('every_num', 0))
-        return (__every < 1) or ((int(step_num) % __every) != 0)
+        return (__every > 0) and ((int(step_num) % __every) == 0)
 
     def _trigger_log(self, step_num: int) -> bool:
         __every = int(self._config['logging'].get('every_num', 0))
@@ -408,7 +408,7 @@ class BaseRunner:
         self._state['scalars']['step/global'] += 1
         self._state['scalars']['step/current'] = __step_num
         # tracks the operation that (will) run on the current step
-        self._state['scalars']['switch/train'] = int(self._trigger_train(step_num=__step_num))
+        self._state['scalars']['switch/test'] = int(self._trigger_test(step_num=__step_num))
         self._state['scalars']['switch/log'] = int(self._trigger_log(step_num=__step_num))
         self._state['scalars']['switch/save'] = int(self._trigger_save(step_num=__step_num))
         self._state['scalars']['switch/grad'] = int(self._trigger_update(step_num=__step_num))
@@ -539,17 +539,17 @@ class BaseRunner:
 
     # BACKWARD #################################################################
 
-    def step_backward(self) -> None:
+    def _step_backward(self) -> None:
         """Accumulate gradients from the current tensor loss."""
         __loss = self._state['tensors'].get('loss/total', None)
         # expect a tensor, not a scalar
-        assert hasattr(__loss, 'shape'), 'Missing `tensors["loss/total"]` before step_backward().'
+        assert hasattr(__loss, 'shape'), 'Missing `tensors["loss/total"]` before _step_backward().'
         # undo the float scaling before computing the backward pass
         self._scaler.scale(__loss).backward()
 
     # UPDATE ###################################################################
 
-    def step_optimizer(self) -> None:
+    def _step_optimizer(self) -> None:
         """Apply optimizer, scaler, scheduler, and gradient clipping on accumulation boundary."""
         __norm_max = float(self._config['gradient'].get('max_norm', 1.0))
         # only work every few steps, after accumulating the loss on a few batches
@@ -613,9 +613,8 @@ class PrefixTrainer(BaseRunner):
 
     def step_objective(self) -> None:
         self._step_losses(gradient_opt=True)
-        if bool(self._state['scalars']['switch/train']):
-            self.step_backward()
-            self.step_optimizer()
+        self._step_backward()
+        self._step_optimizer()
 
 # TESTER #######################################################################
 
@@ -644,8 +643,8 @@ class PrefixTester(BaseRunner):
     def step_objective(self) -> None:
         self._step_losses(gradient_opt=False)
 
-    def _trigger_train(self, step_num: int) -> bool:
-        return False
+    def _trigger_test(self, step_num: int) -> bool:
+        return True
 
     def _trigger_update(self, step_num: int) -> bool:
         return False
