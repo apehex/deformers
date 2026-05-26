@@ -119,7 +119,7 @@ class BaseRunner:
             'tensors': override.get('tensors', {}),
             'scalars': {
                 **{
-                    'switch/train': 1,
+                    'switch/test': 0,
                     'switch/grad': 0,
                     'switch/log': 0,
                     'switch/save': 0,
@@ -141,14 +141,8 @@ class BaseRunner:
                     'loss/mse/k': 0.0,
                     'loss/cos/0': 0.0,
                     'loss/cos/k': 0.0,
-                    'metric/count': 0,
-                    'metrics/mse/0': 0.0,
-                    'metrics/mse/k': 0.0,
-                    'metrics/kld/k': 0.0,
-                    'metrics/topk/k': 0.0,
-                    'vocab/seen': 0.0,
-                    'vocab/min': 0,
-                    'vocab/max': 0,},
+                    'metric/kld/k': 0.0,
+                    'metric/topk/k': 0.0,},
                 **override.get('scalars', {}),},}
 
     # CONFIG ###################################################################
@@ -379,9 +373,9 @@ class BaseRunner:
 
     # SWITCH ###################################################################
 
-    def _trigger_train(self, step_num: int) -> bool:
+    def _trigger_test(self, step_num: int) -> bool:
         __every = int(self._config['testing'].get('every_num', 0))
-        return (__every < 1) or ((int(step_num) % __every) != 0)
+        return (__every > 0) and ((int(step_num) % __every) == 0)
 
     def _trigger_log(self, step_num: int) -> bool:
         __every = int(self._config['logging'].get('every_num', 0))
@@ -403,6 +397,8 @@ class BaseRunner:
 
     def _trigger_hidden(self) -> bool:
         return (
+            bool(self._state['scalars'].get('switch/test', 0))
+            or
             (float(self._config['loss'].get('mse_k_rate', 0.0)) > 0.0)
             or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0))
 
@@ -415,7 +411,7 @@ class BaseRunner:
         self._state['scalars']['step/global'] += 1
         self._state['scalars']['step/current'] = __step_num
         # tracks the operation that (will) run on the current step
-        self._state['scalars']['switch/train'] = int(self._trigger_train(step_num=__step_num))
+        self._state['scalars']['switch/test'] = int(self._trigger_test(step_num=__step_num))
         self._state['scalars']['switch/log'] = int(self._trigger_log(step_num=__step_num))
         self._state['scalars']['switch/save'] = int(self._trigger_save(step_num=__step_num))
         self._state['scalars']['switch/grad'] = int(self._trigger_update(step_num=__step_num))
@@ -446,6 +442,8 @@ class BaseRunner:
             self._state['scalars']['loss/mse/k'] = 0.0
             self._state['scalars']['loss/cos/0'] = 0.0
             self._state['scalars']['loss/cos/k'] = 0.0
+            self._state['scalars']['metric/kld/k'] = 0.0
+            self._state['scalars']['metric/topk/k'] = 0.0
             # garbage collection
             mlable.models.free_memory()
 
@@ -542,6 +540,26 @@ class BaseRunner:
     def step_objective(self) -> None:
         """Base objective implementation that computes/accumulates losses without backward."""
         self.step_losses()
+        self.step_metrics()
+
+    def step_metrics(self) -> None:
+        __kld = torch.tensor(0.0, device=self._state['tensors']['outputs/student/k'].device)
+        __topk = torch.tensor(0.0, device=self._state['tensors']['outputs/student/k'].device)
+        if bool(self._state['scalars'].get('switch/test', 0)):
+            __k = int(self._config['testing'].get('topk_num', 10))
+            __teacher_logits = self._teacher.lm_head(self._state['tensors']['outputs/teacher/k'])
+            __student_logits = self._teacher.lm_head(self._state['tensors']['outputs/student/k'])
+            __kld = mlable.losses.kl_div(
+                predict_arr=__student_logits.float(),
+                target_arr=__teacher_logits.float(),
+                reduce_opt=True)
+            __topk = mlable.metrics.topk_rate(
+                predict_arr=__student_logits,
+                target_arr=__teacher_logits,
+                reduce_opt=True,
+                k_num=__k)
+        self._state['scalars']['metric/kld/k'] += float(__kld.item())
+        self._state['scalars']['metric/topk/k'] += float(__topk.item())
 
     # BACKWARD #################################################################
 
@@ -618,21 +636,14 @@ class PrefixTrainer(BaseRunner):
         self._student_forward(hidden_opt=__hidden, gradient_opt=True)
 
     def step_objective(self) -> None:
-        self.step_losses()
-        if bool(self._state['scalars']['switch/train']):
-            self.step_backward()
-            self.step_optimizer()
+        super().step_objective()
+        self.step_backward()
+        self.step_optimizer()
 
 # TESTER #######################################################################
 
 class PrefixTester(BaseRunner):
     """Prefix runner for evaluation/benchmark phases without parameter updates."""
-
-    def _trigger_hidden(self) -> bool:
-        return bool(self._config['testing'].get('hidden_opt', False)) or super()._trigger_hidden()
-
-    def _trigger_logits(self) -> bool:
-        return bool(self._config['testing'].get('logits_opt', False))
 
     def setup_global(
         self,
@@ -652,48 +663,9 @@ class PrefixTester(BaseRunner):
         __hidden = self._trigger_hidden()
         self._teacher_forward(hidden_opt=__hidden, gradient_opt=False)
         self._student_forward(hidden_opt=__hidden, gradient_opt=False)
-        if self._trigger_logits():
-            self._state['tensors']['outputs/teacher/logits'] = self._teacher.lm_head(
-                self._state['tensors']['outputs/teacher/k'])
-            self._state['tensors']['outputs/student/logits'] = self._teacher.lm_head(
-                self._state['tensors']['outputs/student/k'])
 
-    def step_metrics(self) -> None:
-        __embed_mse = mlable.losses.mse_loss(
-            predict_arr=self._state['tensors']['outputs/student/0'].float(),
-            target_arr=self._state['tensors']['outputs/teacher/0'].float(),
-            reduce_opt=True)
-        __hidden_mse = mlable.losses.mse_loss(
-            predict_arr=self._state['tensors']['outputs/student/k'].float(),
-            target_arr=self._state['tensors']['outputs/teacher/k'].float(),
-            reduce_opt=True)
-        __kl = torch.tensor(0.0, device=__embed_mse.device)
-        __topk = torch.tensor(0.0, device=__embed_mse.device)
-        if self._trigger_logits():
-            __k = int(self._config['testing'].get('topk_num', 10))
-            __teacher_logits = self._state['tensors']['outputs/teacher/logits']
-            __student_logits = self._state['tensors']['outputs/student/logits']
-            __kl = mlable.losses.kl_div(
-                predict_arr=__student_logits.float(),
-                target_arr=__teacher_logits.float(),
-                reduce_opt=True)
-            __topk = mlable.metrics.topk_rate(
-                predict_arr=__student_logits,
-                target_arr=__teacher_logits,
-                reduce_opt=True,
-                k_num=__k)
-        self._state['scalars']['metric/count'] += 1
-        self._state['scalars']['metrics/mse/0'] += float(__embed_mse.item())
-        self._state['scalars']['metrics/mse/k'] += float(__hidden_mse.item())
-        self._state['scalars']['metrics/kld/k'] += float(__kl.item())
-        self._state['scalars']['metrics/topk/k'] += float(__topk.item())
-
-    def step_objective(self) -> None:
-        self.step_losses()
-        self.step_metrics()
-
-    def _trigger_train(self, step_num: int) -> bool:
-        return False
+    def _trigger_test(self, step_num: int) -> bool:
+        return True
 
     def _trigger_update(self, step_num: int) -> bool:
         return False

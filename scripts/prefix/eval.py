@@ -15,14 +15,11 @@ import huggingface_hub
 import torch
 import transformers
 
-import mlable.losses
-import mlable.metrics
 import mlable.models
 
 import deformers.datasets.generic
 import deformers.models.generic
 import deformers.models.prefix
-import deformers.pipelines.eval
 import deformers.pipelines.prefix.trainer
 import deformers.tokenizers.byte
 
@@ -114,65 +111,37 @@ LOSS_CFG = {
 
 TESTING_CFG = {
     'batch_num': MAIN_CFG['batch_num'],
-    'topk_num': MAIN_CFG['topk_num'],
-    'hidden_opt': True,
-    'logits_opt': True,}
-
-PROBE_CFG = {
-    'sentences': [
-        'The quick brown fox jumps over the lazy dog.',
-        'In the beginning was the Word, and the Word was with God.',],
-    'vocab_opt': True,}
-
-# WRAPPERS #####################################################################
-
-class BoundedDataset:
-    """Limit iteration count while preserving a stable __len__ for runner progress."""
-
-    def __init__(self, dataset_obj: object, batch_num: int) -> None:
-        self._dataset = dataset_obj
-        self._batch = int(batch_num)
-
-    def __len__(self) -> int:
-        if self._batch < 1:
-            return len(self._dataset)
-        return min(len(self._dataset), self._batch)
-
-    def __iter__(self) -> object:
-        for __i, __row in enumerate(iter(self._dataset)):
-            if (self._batch > 0) and (__i >= self._batch):
-                break
-            yield __row
+    'topk_num': MAIN_CFG['topk_num'],}
 
 # UTILS ########################################################################
 
 def summarize_metrics(state: dict) -> None:
     """Print averaged evaluation metrics from `state['scalars']`."""
     __scalars = state['scalars']
-    __count = int(__scalars.get('metric/count', 0))
+    __count = int(state.get('count', 0))
     if __count < 1:
         print('[eval] no evaluation batches were processed.')
         return
     print('\n[eval] === summary metrics ===')
     print(f'[eval] batches evaluated : {__count}')
-    print(f'[eval] embed MSE         : {__scalars["metrics/mse/0"] / __count:.6f}')
-    print(f'[eval] hidden MSE        : {__scalars["metrics/mse/k"] / __count:.6f}')
-    print(f'[eval] KL divergence     : {__scalars["metrics/kld/k"] / __count:.6f}')
-    print(f'[eval] top-k match       : {__scalars["metrics/topk/k"] / __count:.4f} (k={TESTING_CFG["topk_num"]})')
+    print(f'[eval] embed MSE         : {__scalars["loss/mse/0"] / __count:.6f}')
+    print(f'[eval] hidden MSE        : {__scalars["loss/mse/k"] / __count:.6f}')
+    print(f'[eval] KL divergence     : {__scalars["metric/kld/k"] / __count:.6f}')
+    print(f'[eval] top-k match       : {__scalars["metric/topk/k"] / __count:.4f} (k={TESTING_CFG["topk_num"]})')
 
-def forward_probe(
-    runner_obj: deformers.pipelines.prefix.trainer.PrefixTester,
-    batch_arr: dict,
-    column_str: str,
-) -> dict:
-    """Run one probe batch and return detached tensors, clearing runner tensor state afterwards."""
-    runner_obj.step_batch(batch_arr=batch_arr, column_str=column_str)
-    runner_obj.step_forward()
-    __outputs = {
-        __k: (__v.detach().clone() if torch.is_tensor(__v) else __v)
-        for (__k, __v) in runner_obj._state['tensors'].items()}
-    runner_obj._state['tensors'] = {}
-    return __outputs
+def prepare_summary_callback(summary_obj: dict) -> dict:
+    """Aggregate per-step evaluation scalars into a local summary dict."""
+    def __operation(state: dict) -> None:
+        summary_obj['count'] += 1
+        summary_obj['scalars']['loss/mse/0'] += state['scalars']['loss/mse/0']
+        summary_obj['scalars']['loss/mse/k'] += state['scalars']['loss/mse/k']
+        summary_obj['scalars']['metric/kld/k'] += state['scalars']['metric/kld/k']
+        summary_obj['scalars']['metric/topk/k'] += state['scalars']['metric/topk/k']
+    return {
+        'name': 'summary',
+        'trigger': lambda state: True,
+        'operation': __operation,
+        'cleanup': lambda: None,}
 
 # DATASET ######################################################################
 
@@ -183,9 +152,7 @@ print('[init] preprocessing the dataset...')
 DATASET_OBJ = DATASET_OBJ.shuffle(seed=MAIN_CFG['seed_num']).select_columns(['text'])
 DATASET_OBJ = deformers.datasets.generic.BatchedDataset(
     dataset_obj=DATASET_OBJ,
-    batch_dim=BATCH_CFG['batch_dim'])
-DATASET_OBJ = BoundedDataset(
-    dataset_obj=DATASET_OBJ,
+    batch_dim=BATCH_CFG['batch_dim'],
     batch_num=TESTING_CFG['batch_num'])
 
 # TOKENIZERS ###################################################################
@@ -255,71 +222,19 @@ TESTER.setup_phase(
     loss_cfg=LOSS_CFG,
     testing_cfg=TESTING_CFG,)
 
+SUMMARY_STATE = {
+    'count': 0,
+    'scalars': {
+        'loss/mse/0': 0.0,
+        'loss/mse/k': 0.0,
+        'metric/kld/k': 0.0,
+        'metric/topk/k': 0.0,},}
+TESTER._callbacks.append(prepare_summary_callback(summary_obj=SUMMARY_STATE))
+
 print('[eval] running phase...')
 TESTER.run_phase()
 
 print('[eval] cleaning up callbacks...')
 TESTER.close_callbacks()
 
-summarize_metrics(TESTER._state)
-
-# FIXED SENTENCE PROBE #########################################################
-
-if PROBE_CFG['sentences']:
-    print('\n[eval] === fixed sentence probe ===')
-    __probe = forward_probe(
-        runner_obj=TESTER,
-        batch_arr={'text': PROBE_CFG['sentences']},
-        column_str='text')
-    __k = int(TESTING_CFG['topk_num'])
-    __mask = __probe['inputs/mask']
-    __teacher_logits = __probe['outputs/teacher/logits']
-    __student_logits = __probe['outputs/student/logits']
-    for __i, __sentence in enumerate(PROBE_CFG['sentences']):
-        __len = int(__mask[__i].sum().item())
-        if __len < 1:
-            print(f'[eval] sentence {__i}: "{__sentence[:60]}"')
-            print('[eval] skipped: empty tokenized sentence.')
-            continue
-        __pos = __len - 1
-        __teacher_top = __teacher_logits[__i, __pos].topk(__k).indices.tolist()
-        __student_top = __student_logits[__i, __pos].topk(__k).indices.tolist()
-        print(f'[eval] sentence {__i}: "{__sentence[:60]}"')
-        print(f'[eval] teacher top-{__k}: {TEXT_TOK.convert_ids_to_tokens(__teacher_top)}')
-        print(f'[eval] student top-{__k}: {TEXT_TOK.convert_ids_to_tokens(__student_top)}')
-
-# VOCAB PROBE ##################################################################
-
-if PROBE_CFG['vocab_opt']:
-    print('\n[eval] === vocab probe ===')
-    __vocab_dim = (
-        SOURCE_MOD.config.text_config.vocab_size
-        if hasattr(SOURCE_MOD.config, 'text_config')
-        else SOURCE_MOD.config.vocab_size)
-    __indices = deformers.pipelines.eval.indices_probe(
-        vocab_dim=__vocab_dim,
-        batch_dim=BATCH_CFG['batch_dim'],
-        sequence_dim=BATCH_CFG['sequence_dim'])
-    __probe = forward_probe(
-        runner_obj=TESTER,
-        batch_arr={'indices': __indices},
-        column_str='indices')
-    __embed_mse = torch.nn.functional.mse_loss(
-        __probe['outputs/teacher/0'].float(),
-        __probe['outputs/student/0'].float())
-    __hidden_mse = torch.nn.functional.mse_loss(
-        __probe['outputs/teacher/k'].float(),
-        __probe['outputs/student/k'].float())
-    __kl = mlable.losses.kl_div(
-        predict_arr=__probe['outputs/student/logits'].float(),
-        target_arr=__probe['outputs/teacher/logits'].float(),
-        reduce_opt=True)
-    __topk = mlable.metrics.topk_rate(
-        predict_arr=__probe['outputs/student/logits'],
-        target_arr=__probe['outputs/teacher/logits'],
-        reduce_opt=True,
-        k_num=TESTING_CFG['topk_num'])
-    print(f'[eval] vocab embed MSE   : {float(__embed_mse.item()):.6f}')
-    print(f'[eval] vocab hidden MSE  : {float(__hidden_mse.item()):.6f}')
-    print(f'[eval] vocab KL          : {float(__kl.item()):.6f}')
-    print(f'[eval] vocab top-k       : {float(__topk.item()):.4f} (k={TESTING_CFG["topk_num"]})')
+summarize_metrics(SUMMARY_STATE)

@@ -162,10 +162,10 @@ class TestInitState:
         __state = __t.init_state()
         assert __state['tensors'] == {}
 
-    def test_scalars_has_switch_train(self):
+    def test_scalars_has_switch_test(self):
         __t = _make_trainer()
         __state = __t.init_state()
-        assert __state['scalars']['switch/train'] == 1
+        assert __state['scalars']['switch/test'] == 0
 
     def test_scalars_has_switch_grad_zero(self):
         __t = _make_trainer()
@@ -268,15 +268,15 @@ class TestInitStep:
         __t.init_step(step_num=0)
         assert __t._state['scalars']['switch/save'] == 0
 
-    def test_switch_train_true_when_test_disabled(self):
+    def test_switch_test_false_when_test_disabled(self):
         __t = self._trainer_with_steps(test_every=0)
         __t.init_step(step_num=0)
-        assert __t._state['scalars']['switch/train'] == 1
+        assert __t._state['scalars']['switch/test'] == 0
 
-    def test_switch_train_false_at_test_cadence(self):
+    def test_switch_test_true_at_test_cadence(self):
         __t = self._trainer_with_steps(test_every=3)
         __t.init_step(step_num=2)  # step/current = 3
-        assert __t._state['scalars']['switch/train'] == 0
+        assert __t._state['scalars']['switch/test'] == 1
 
 
 # STEP_BATCH ###################################################################
@@ -446,9 +446,8 @@ class TestPrefixTesterStepForward:
         __t.step_forward()
         assert __grad_enabled == [False]
 
-    def test_populates_logits_when_enabled(self, monkeypatch):
+    def test_does_not_store_logits(self, monkeypatch):
         __t = _make_tester()
-        __t._config['testing'].update({'hidden_opt': True, 'logits_opt': True})
         __t._state['tensors']['inputs/mask'] = torch.ones(2, 4)
         __t._state['tensors']['inputs/indices'] = torch.zeros(2, 4, dtype=torch.long)
         __t._state['tensors']['inputs/bytes'] = torch.zeros(2, 4, 2, dtype=torch.long)
@@ -464,8 +463,8 @@ class TestPrefixTesterStepForward:
         __t._teacher.lm_head = lambda inputs: inputs + 1.0
 
         __t.step_forward()
-        assert 'outputs/teacher/logits' in __t._state['tensors']
-        assert 'outputs/student/logits' in __t._state['tensors']
+        assert 'outputs/teacher/logits' not in __t._state['tensors']
+        assert 'outputs/student/logits' not in __t._state['tensors']
 
 
 class TestPrefixTesterObjective:
@@ -480,19 +479,14 @@ class TestPrefixTesterObjective:
 
     def test_accumulates_metrics(self):
         __t = _make_tester()
-        __t._config['testing'].update({'logits_opt': True, 'topk_num': 2})
-        __t._state['tensors']['outputs/teacher/0'] = torch.ones(1, 1, 2)
-        __t._state['tensors']['outputs/student/0'] = torch.zeros(1, 1, 2)
+        __t._config['testing'].update({'topk_num': 2})
         __t._state['tensors']['outputs/teacher/k'] = torch.ones(1, 1, 2)
         __t._state['tensors']['outputs/student/k'] = torch.zeros(1, 1, 2)
-        __t._state['tensors']['outputs/teacher/logits'] = torch.tensor([[[2.0, 1.0, 0.0]]])
-        __t._state['tensors']['outputs/student/logits'] = torch.tensor([[[2.0, 1.0, 0.0]]])
+        __t._state['scalars']['switch/test'] = 1
+        __t._teacher.lm_head = lambda inputs: torch.tensor([[[2.0, 1.0, 0.0]]])
         __t.step_metrics()
-        assert __t._state['scalars']['metric/count'] == 1
-        assert __t._state['scalars']['metrics/mse/0'] > 0.0
-        assert __t._state['scalars']['metrics/mse/k'] > 0.0
-        assert abs(__t._state['scalars']['metrics/kld/k']) < 1e-5
-        assert __t._state['scalars']['metrics/topk/k'] == 1.0
+        assert abs(__t._state['scalars']['metric/kld/k']) < 1e-5
+        assert __t._state['scalars']['metric/topk/k'] == 1.0
 
 
 class TestRunnerTriggers:
@@ -509,7 +503,7 @@ class TestRunnerTriggers:
     def test_prefix_tester_init_step_applies_trigger_switches(self):
         __t = _make_tester(grad_every=2, test_every=3)
         __t.init_step(step_num=0)
-        assert __t._state['scalars']['switch/train'] == 0
+        assert __t._state['scalars']['switch/test'] == 1
         assert __t._state['scalars']['switch/grad'] == 0
         assert __t._state['scalars']['switch/progress'] == 1
         assert __t._state['scalars']['switch/cleanup'] == 1
@@ -655,25 +649,15 @@ class TestStepOptimizer:
 
 class TestPrefixTrainerObjective:
 
-    def test_skips_backward_and_optimizer_when_train_switch_off(self):
+    def test_runs_losses_metrics_backward_and_optimizer(self):
         __t = _make_trainer()
         __t.step_losses = unittest.mock.MagicMock()
+        __t.step_metrics = unittest.mock.MagicMock()
         __t.step_backward = unittest.mock.MagicMock()
         __t.step_optimizer = unittest.mock.MagicMock()
-        __t._state['scalars']['switch/train'] = 0
         __t.step_objective()
         __t.step_losses.assert_called_once()
-        __t.step_backward.assert_not_called()
-        __t.step_optimizer.assert_not_called()
-
-    def test_runs_backward_and_optimizer_when_train_switch_on(self):
-        __t = _make_trainer()
-        __t.step_losses = unittest.mock.MagicMock()
-        __t.step_backward = unittest.mock.MagicMock()
-        __t.step_optimizer = unittest.mock.MagicMock()
-        __t._state['scalars']['switch/train'] = 1
-        __t.step_objective()
-        __t.step_losses.assert_called_once()
+        __t.step_metrics.assert_called_once()
         __t.step_backward.assert_called_once()
         __t.step_optimizer.assert_called_once()
 
