@@ -162,11 +162,6 @@ class TestInitState:
         __state = __t.init_state()
         assert __state['tensors'] == {}
 
-    def test_scalars_has_switch_train(self):
-        __t = _make_runner()
-        __state = __t.init_state()
-        assert __state['scalars']['switch/train'] == 1
-
     def test_scalars_has_switch_grad_zero(self):
         __t = _make_runner()
         __state = __t.init_state()
@@ -267,16 +262,6 @@ class TestInitStep:
         __t = self._runner_with_steps(save_every=0)
         __t.init_step(step_num=1)
         assert __t._state['scalars']['switch/save'] == 0
-
-    def test_switch_train_true_when_test_disabled(self):
-        __t = self._runner_with_steps(test_every=0)
-        __t.init_step(step_num=1)
-        assert __t._state['scalars']['switch/train'] == 1
-
-    def test_switch_train_false_at_test_cadence(self):
-        __t = self._runner_with_steps(test_every=3)
-        __t.init_step(step_num=3)
-        assert __t._state['scalars']['switch/train'] == 0
 
 
 # STEP_BATCH ###################################################################
@@ -474,7 +459,6 @@ class TestRunnerTriggers:
     def test_prefix_tester_init_step_applies_trigger_switches(self):
         __t = _make_tester(grad_every=2, test_every=3)
         __t.init_step(step_num=1)
-        assert __t._state['scalars']['switch/train'] == 0
         assert __t._state['scalars']['switch/grad'] == 0
         assert __t._state['scalars']['switch/progress'] == 1
         assert __t._state['scalars']['switch/cleanup'] == 1
@@ -627,16 +611,6 @@ class TestStepOptimizer:
 
 
 class TestPrefixTrainerObjective:
-
-    def test_skips_backward_and_optimizer_when_train_switch_off(self):
-        __t = _make_runner(test_every=3)
-        __t._step_losses = unittest.mock.MagicMock()
-        __t._step_backward = unittest.mock.MagicMock()
-        __t._step_optimizer = unittest.mock.MagicMock()
-        __t.step_objective(step_num=3)
-        __t._step_losses.assert_not_called()
-        __t._step_backward.assert_not_called()
-        __t._step_optimizer.assert_not_called()
 
     def test_runs_backward_and_optimizer_when_train_switch_on(self):
         __t = _make_runner()

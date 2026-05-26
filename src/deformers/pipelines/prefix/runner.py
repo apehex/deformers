@@ -117,7 +117,6 @@ class BaseRunner:
             'tensors': override.get('tensors', {}),
             'scalars': {
                 **{
-                    'switch/train': 1,
                     'switch/grad': 0,
                     'switch/test': 0,
                     'switch/log': 0,
@@ -159,6 +158,36 @@ class BaseRunner:
     def _check_runtime(self) -> None:
         """Hook for mode-specific setup checks."""
         pass
+
+    # SWITCH ###################################################################
+
+    def _trigger_test(self, step_num: int) -> bool:
+        __every = int(self._config['testing'].get('every_num', 0))
+        return (__every > 0) and ((int(step_num) % __every) == 0)
+
+    def _trigger_log(self, step_num: int) -> bool:
+        __every = int(self._config['logging'].get('every_num', 0))
+        return (__every > 0) and ((int(step_num) % __every) == 0)
+
+    def _trigger_save(self, step_num: int) -> bool:
+        __every = int(self._config['saving'].get('every_num', 0))
+        return (__every > 0) and ((int(step_num) % __every) == 0)
+
+    def _trigger_update(self, step_num: int) -> bool:
+        __every = int(self._config['gradient'].get('every_num', 1))
+        return (int(step_num) % __every) == 0
+
+    def _trigger_progress(self, step_num: int) -> bool:
+        return self._trigger_update(step_num=step_num)
+
+    def _trigger_cleanup(self, step_num: int) -> bool:
+        return self._trigger_update(step_num=step_num)
+
+    def _trigger_hidden(self, step_num: int) -> bool:
+        return (
+            self._trigger_test(step_num=step_num)
+            or (float(self._config['loss'].get('mse_k_rate', 0.0)) > 0.0)
+            or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0))
 
     # GLOBAL ###################################################################
 
@@ -371,39 +400,6 @@ class BaseRunner:
         """Terminate the temporary state of the epoch."""
         pbar_obj.close()
 
-    # SWITCH ###################################################################
-
-    def _trigger_test(self, step_num: int) -> bool:
-        __every = int(self._config['testing'].get('every_num', 0))
-        return (__every > 0) and ((int(step_num) % __every) == 0)
-
-    def _trigger_train(self, step_num: int) -> bool:
-        return not self._trigger_test(step_num=step_num)
-
-    def _trigger_log(self, step_num: int) -> bool:
-        __every = int(self._config['logging'].get('every_num', 0))
-        return (__every > 0) and ((int(step_num) % __every) == 0)
-
-    def _trigger_save(self, step_num: int) -> bool:
-        __every = int(self._config['saving'].get('every_num', 0))
-        return (__every > 0) and ((int(step_num) % __every) == 0)
-
-    def _trigger_update(self, step_num: int) -> bool:
-        __every = int(self._config['gradient'].get('every_num', 1))
-        return (int(step_num) % __every) == 0
-
-    def _trigger_progress(self, step_num: int) -> bool:
-        return self._trigger_update(step_num=step_num)
-
-    def _trigger_cleanup(self, step_num: int) -> bool:
-        return self._trigger_update(step_num=step_num)
-
-    def _trigger_hidden(self, step_num: int) -> bool:
-        return (
-            (float(self._config['loss'].get('mse_k_rate', 0.0)) > 0.0)
-            or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0)
-            or self._trigger_test(step_num=step_num))
-
     # STEP #####################################################################
 
     def init_step(self, step_num: int) -> None:
@@ -413,7 +409,6 @@ class BaseRunner:
         self._state['scalars']['step/global'] += 1
         self._state['scalars']['step/current'] = __step_num
         # tracks the operation that (will) run on the current step
-        self._state['scalars']['switch/train'] = int(self._trigger_train(step_num=__step_num))
         self._state['scalars']['switch/test'] = int(self._trigger_test(step_num=__step_num))
         self._state['scalars']['switch/log'] = int(self._trigger_log(step_num=__step_num))
         self._state['scalars']['switch/save'] = int(self._trigger_save(step_num=__step_num))
@@ -612,10 +607,9 @@ class PrefixTrainer(BaseRunner):
         self._student_forward(hidden_opt=__hidden, gradient_opt=True)
 
     def step_objective(self, step_num: int) -> None:
-        if self._trigger_train(step_num=step_num):
-            self._step_losses(gradient_opt=True)
-            self._step_backward()
-            self._step_optimizer(step_num=step_num)
+        self._step_losses(gradient_opt=True)
+        self._step_backward()
+        self._step_optimizer(step_num=step_num)
 
 # TESTER #######################################################################
 
@@ -646,9 +640,6 @@ class PrefixTester(BaseRunner):
 
     def _trigger_test(self, step_num: int) -> bool:
         return True
-
-    def _trigger_train(self, step_num: int) -> bool:
-        return False
 
     def _trigger_update(self, step_num: int) -> bool:
         return False
