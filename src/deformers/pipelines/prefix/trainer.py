@@ -428,10 +428,7 @@ class BaseRunner:
 
     def close_step(self) -> None:
         """Reset the state after updating the weights."""
-        __cleanup_opt = bool(
-            self._state['scalars'].get('switch/cleanup', 0)
-            or self._state['scalars'].get('switch/grad', 0))
-        if __cleanup_opt:
+        if bool(self._state['scalars']['switch/cleanup']):
             # reset transient tensors and accumulated scalar losses for the current step window
             self._state['tensors'] = {}
             self._state['scalars']['loss/total'] = 0.0
@@ -586,11 +583,7 @@ class BaseRunner:
 
     def step_progress(self, pbar_obj: object) -> None:
         # only work every few steps, after accumulating the loss on a few batches
-        __step_num = int(self._state['scalars'].get('step/current', 0))
-        __progress_opt = bool(
-            self._trigger_progress(step_num=__step_num)
-            or self._state['scalars'].get('switch/grad', 0))
-        if __progress_opt:
+        if bool(self._state['scalars']['switch/progress']):
             # aggregate and format
             __stats = _callbacks.format_state(state=self._state['scalars'])
             # filter the epoch and step since they are already in the pbar
