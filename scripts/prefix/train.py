@@ -53,7 +53,7 @@ import deformers.datasets.generic
 import deformers.datasets.random
 import deformers.models.generic
 import deformers.models.prefix
-import deformers.pipelines.prefix.trainer
+import deformers.pipelines.prefix.runner
 import deformers.tokenizers.byte
 
 # COMMON CONFIG ################################################################
@@ -308,7 +308,7 @@ PHASE1_CFG['scheduler']['total_num'] = max(1, (PHASE1_CFG['phase']['epoch_num'] 
 PHASE2_CFG['scheduler']['total_num'] = max(1, (PHASE2_CFG['phase']['epoch_num'] * WIKI_DIM) // GRADIENT_CFG['every_num'])
 
 print('[init] building trainer...')
-TRAINER = deformers.pipelines.prefix.trainer.PrefixTrainer(
+TRAINER = deformers.pipelines.prefix.runner.PrefixTrainer(
     text_tok=TEXT_TOK,
     byte_tok=BYTE_TOK,
     teacher_mod=SOURCE_MOD,

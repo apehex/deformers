@@ -1,4 +1,4 @@
-"""The trainer owns:
+"""The prefix runner owns:
 - mutable runtime state
 - teacher/student references (external)
 - tokenizer references (external)
@@ -10,15 +10,15 @@ Stateless transforms such as vectorization and loss computation remain in
 `deformers.pipelines.prefix.processors`.
 
 Typical lifecycle:
-    trainer = PrefixTrainer(text_tok, byte_tok, teacher, student)
-    trainer.setup_global(context_cfg=..., optimizer_cfg=..., scaler_cfg=...)
-    trainer.setup_phase(dataset, epoch_num, column, batch_cfg=..., loss_cfg=..., ...)
-    trainer.run_phase()                     # runs all epochs
-    trainer.close_callbacks()
+    runner = PrefixTrainer(text_tok, byte_tok, teacher, student)
+    runner.setup_global(context_cfg=..., optimizer_cfg=..., scaler_cfg=...)
+    runner.setup_phase(dataset, epoch_num, column, batch_cfg=..., loss_cfg=..., ...)
+    runner.run_phase()                     # runs all epochs
+    runner.close_callbacks()
 
-    trainer.setup_phase(dataset2, epoch_num2, column2, batch_cfg=..., loss_cfg=..., ...)
-    trainer.run_phase()
-    trainer.close_callbacks()
+    runner.setup_phase(dataset2, epoch_num2, column2, batch_cfg=..., loss_cfg=..., ...)
+    runner.run_phase()
+    runner.close_callbacks()
 """
 
 import contextlib
@@ -117,6 +117,7 @@ class BaseRunner:
             'tensors': override.get('tensors', {}),
             'scalars': {
                 **{
+                    'switch/train': 1,
                     'switch/grad': 0,
                     'switch/test': 0,
                     'switch/log': 0,
@@ -151,7 +152,7 @@ class BaseRunner:
         return isinstance(config_dict, dict) and all(__key in config_dict for __key in required_keys)
 
     def _check_setup(self) -> None:
-        """Raise AssertionError if the trainer is not ready to run a phase."""
+        """Raise AssertionError if the runner is not ready to run a phase."""
         assert self._dataset is not None, 'dataset is None; call setup_phase() first.'
         self._check_runtime()
 
@@ -354,15 +355,15 @@ class BaseRunner:
             epoch_tot=epoch_tot,
             dataset_obj=dataset_obj)
         # fresh iterator on the dataset
-        for __step, __batch in enumerate(__pbar):
+        for __step_num, __batch in enumerate(__pbar, start=1):
             # track the counters in the state
-            self.init_step(step_num=__step)
+            self.init_step(step_num=__step_num)
             # vectorize => forward => loss => backward => update => callbacks => reset
-            self.run_step(batch_arr=__batch, column_str=column_str)
+            self.run_step(step_num=__step_num, batch_arr=__batch, column_str=column_str)
             # format and display the main stats
-            self.step_progress(__pbar)
+            self.step_progress(step_num=__step_num, pbar_obj=__pbar)
             # reset the loss and free the memory
-            self.close_step()
+            self.close_step(step_num=__step_num)
         # terminate the progress bar
         self.close_epoch(__pbar)
 
@@ -375,6 +376,9 @@ class BaseRunner:
     def _trigger_test(self, step_num: int) -> bool:
         __every = int(self._config['testing'].get('every_num', 0))
         return (__every > 0) and ((int(step_num) % __every) == 0)
+
+    def _trigger_train(self, step_num: int) -> bool:
+        return not self._trigger_test(step_num=step_num)
 
     def _trigger_log(self, step_num: int) -> bool:
         __every = int(self._config['logging'].get('every_num', 0))
@@ -394,20 +398,22 @@ class BaseRunner:
     def _trigger_cleanup(self, step_num: int) -> bool:
         return self._trigger_update(step_num=step_num)
 
-    def _trigger_hidden(self) -> bool:
+    def _trigger_hidden(self, step_num: int) -> bool:
         return (
             (float(self._config['loss'].get('mse_k_rate', 0.0)) > 0.0)
-            or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0))
+            or (float(self._config['loss'].get('cos_k_rate', 0.0)) > 0.0)
+            or self._trigger_test(step_num=step_num))
 
     # STEP #####################################################################
 
     def init_step(self, step_num: int) -> None:
         """Update counters and step switches."""
-        __step_num = int(step_num) + 1
+        __step_num = int(step_num)
         # step/global is a monotonically increasing counter that persists across epochs and phases
         self._state['scalars']['step/global'] += 1
         self._state['scalars']['step/current'] = __step_num
         # tracks the operation that (will) run on the current step
+        self._state['scalars']['switch/train'] = int(self._trigger_train(step_num=__step_num))
         self._state['scalars']['switch/test'] = int(self._trigger_test(step_num=__step_num))
         self._state['scalars']['switch/log'] = int(self._trigger_log(step_num=__step_num))
         self._state['scalars']['switch/save'] = int(self._trigger_save(step_num=__step_num))
@@ -417,18 +423,19 @@ class BaseRunner:
 
     def run_step(
         self,
+        step_num: int,
         batch_arr: object,
         column_str: str,
     ) -> None:
         """Run one training/testing step."""
-        self.step_batch(batch_arr=batch_arr, column_str=column_str)
-        self.step_forward()
-        self.step_objective()
-        self.step_callbacks()
+        self.step_batch(step_num=step_num, batch_arr=batch_arr, column_str=column_str)
+        self.step_forward(step_num=step_num)
+        self.step_objective(step_num=step_num)
+        self.step_callbacks(step_num=step_num)
 
-    def close_step(self) -> None:
+    def close_step(self, step_num: int) -> None:
         """Reset the state after updating the weights."""
-        if bool(self._state['scalars']['switch/cleanup']):
+        if self._trigger_cleanup(step_num=step_num):
             # reset transient tensors and accumulated scalar losses for the current step window
             self._state['tensors'] = {}
             self._state['scalars']['loss/total'] = 0.0
@@ -441,7 +448,7 @@ class BaseRunner:
 
     # VECTORIZE ################################################################
 
-    def step_batch(self, batch_arr: object, column_str: str) -> None:
+    def step_batch(self, step_num: int, batch_arr: object, column_str: str) -> None:
         """Vectorize a raw batch into mask, token ids, and byte patches."""
         __pad = self._config['batch'].get('padding_str', '')
         # common args
@@ -478,7 +485,7 @@ class BaseRunner:
                 tuple(self._state['tensors']['outputs/teacher/0'].shape),
                 dtype=self._state['tensors']['outputs/teacher/0'].dtype,
                 device=self._state['tensors']['outputs/teacher/0'].device)
-            # compute the hidden activations only if they are used in the loss
+            # compute hidden activations only when a triggered computation needs them
             if hidden_opt:
                 self._state['tensors']['outputs/teacher/k'] = _processors.forward(
                     embeds_arr=self._state['tensors']['outputs/teacher/0'],
@@ -501,7 +508,7 @@ class BaseRunner:
                     mask_arr=self._state['tensors']['inputs/mask'],
                     model_obj=self._teacher)
 
-    def step_forward(self) -> None:
+    def step_forward(self, step_num: int) -> None:
         raise NotImplementedError('Subclasses of BaseRunner must implement step_forward().')
 
     # LOSS #####################################################################
@@ -530,7 +537,7 @@ class BaseRunner:
         self._state['scalars']['loss/cos/k'] += float(__outputs[3].item())
         self._state['scalars']['loss/total'] += float(__outputs[4].item())
 
-    def step_objective(self) -> None:
+    def step_objective(self, step_num: int) -> None:
         """Base objective implementation that computes/accumulates losses without backward."""
         self._step_losses(gradient_opt=True)
 
@@ -546,11 +553,11 @@ class BaseRunner:
 
     # UPDATE ###################################################################
 
-    def _step_optimizer(self) -> None:
+    def _step_optimizer(self, step_num: int) -> None:
         """Apply optimizer, scaler, scheduler, and gradient clipping on accumulation boundary."""
         __norm_max = float(self._config['gradient'].get('max_norm', 1.0))
         # only work every few steps, after accumulating the loss on a few batches
-        if bool(self._state['scalars']['switch/grad']):
+        if self._trigger_update(step_num=step_num):
             # gradient clipping; unscale first to get true grad norm
             self._scaler.unscale_(self._optimizer)
             self._state['scalars']['gradient/rate'] = _monitor.current_lr(self._optimizer)
@@ -568,7 +575,7 @@ class BaseRunner:
 
     # CALLBACKS ################################################################
 
-    def step_callbacks(self) -> None:
+    def step_callbacks(self, step_num: int) -> None:
         """Run all triggered callbacks on the current state."""
         for __callback in self._callbacks:
             if __callback['trigger'](self._state):
@@ -581,9 +588,9 @@ class BaseRunner:
 
     # PROGRESS #################################################################
 
-    def step_progress(self, pbar_obj: object) -> None:
+    def step_progress(self, step_num: int, pbar_obj: object) -> None:
         # only work every few steps, after accumulating the loss on a few batches
-        if bool(self._state['scalars']['switch/progress']):
+        if self._trigger_progress(step_num=step_num):
             # aggregate and format
             __stats = _callbacks.format_state(state=self._state['scalars'])
             # filter the epoch and step since they are already in the pbar
@@ -599,15 +606,16 @@ class PrefixTrainer(BaseRunner):
         assert self._scaler is not None, 'scaler is None; call setup_global() first.'
         assert self._scheduler is not None, 'scheduler is None; call setup_phase() first.'
 
-    def step_forward(self) -> None:
-        __hidden = self._trigger_hidden()
+    def step_forward(self, step_num: int) -> None:
+        __hidden = self._trigger_hidden(step_num=step_num)
         self._teacher_forward(hidden_opt=__hidden, gradient_opt=False)
         self._student_forward(hidden_opt=__hidden, gradient_opt=True)
 
-    def step_objective(self) -> None:
-        self._step_losses(gradient_opt=True)
-        self._step_backward()
-        self._step_optimizer()
+    def step_objective(self, step_num: int) -> None:
+        if self._trigger_train(step_num=step_num):
+            self._step_losses(gradient_opt=True)
+            self._step_backward()
+            self._step_optimizer(step_num=step_num)
 
 # TESTER #######################################################################
 
@@ -628,16 +636,19 @@ class PrefixTester(BaseRunner):
         if self._check_config(scaler_cfg, ('enabled',)):
             self._config['scaler'] = scaler_cfg
 
-    def step_forward(self) -> None:
-        __hidden = self._trigger_hidden()
+    def step_forward(self, step_num: int) -> None:
+        __hidden = self._trigger_hidden(step_num=step_num)
         self._teacher_forward(hidden_opt=__hidden, gradient_opt=False)
         self._student_forward(hidden_opt=__hidden, gradient_opt=False)
 
-    def step_objective(self) -> None:
+    def step_objective(self, step_num: int) -> None:
         self._step_losses(gradient_opt=False)
 
     def _trigger_test(self, step_num: int) -> bool:
         return True
+
+    def _trigger_train(self, step_num: int) -> bool:
+        return False
 
     def _trigger_update(self, step_num: int) -> bool:
         return False
