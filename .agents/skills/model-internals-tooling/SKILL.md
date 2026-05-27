@@ -56,6 +56,14 @@ description: Use for choosing and applying tools for activation extraction, hook
 - Compare outputs with and without no-op hooks.
 - Confirm hooks/caches are cleared and sensitive artifacts are not exposed.
 
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/transformerlens_activation_patching.md` for clean/corrupted activation patching workflows.
+- `examples/pytorch_nnsight_hooks.md` for direct PyTorch hooks and nnsight tracing.
+- `examples/attribution_probe_workflow.md` for probes, attribution, and causal follow-up requirements.
+
 ## Related Skills
 
 - `activation-and-latent-interventions` for steering and causal interventions.

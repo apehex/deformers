@@ -58,6 +58,14 @@ description: Use when selecting or wiring practical ML data/model tools such as 
 - Check output artifacts exist and are not accidentally committed if large.
 - Confirm model/tokenizer revisions and dataset split are logged.
 
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/huggingface_dataset_model_pipeline.md` for dataset/model loading and preprocessing.
+- `examples/tokenizer_collator_recipe.md` for padding, masks, labels, and batch contracts.
+- `examples/dvc_model_artifact_workflow.md` for reproducible large data and model artifacts.
+
 ## Common Tool Recipes
 
 - PyTorch: use tensors/modules/autograd/optimizers for custom training loops, losses, hooks, checkpointing, and GPU execution.

@@ -69,6 +69,14 @@ description: Use for cross-model latent transfer, model stitching, affine residu
 - Test transfer on held-out prompts and at least one neighboring layer.
 - Report failed transfers alongside successes.
 
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/affine_residual_map.md` for paired-activation maps and feature transfer.
+- `examples/model_stitching_transfer.md` for layer-to-layer stitching and utility checks.
+- `examples/crosscoder_shared_feature_analysis.md` for shared-vs-model-specific sparse features.
+
 ## Source Map
 
 - `references/008-vocabulary-transfer.md`

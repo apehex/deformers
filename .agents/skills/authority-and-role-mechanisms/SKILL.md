@@ -66,6 +66,14 @@ description: Use when studying instruction hierarchy, authority attribution, rol
 - Confirm role confusion predicts behavior on held-out templates, not only on the training distribution.
 - Include negative controls where low-authority text is clearly quoted or wrapped as untrusted data.
 
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/role_conflict_probe.md` for role-classification probes and confusion matrices.
+- `examples/spoofing_factor_ablation.md` for isolating formatting, source, and template cues.
+- `examples/mitigation_evaluation.md` for before/after tests of wrappers, templates, or segment encodings.
+
 ## Source Map
 
 - `references/012-openai-instruction-hierarchy-challenge.md`

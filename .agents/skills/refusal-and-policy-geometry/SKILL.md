@@ -64,6 +64,14 @@ description: Use when researching refusal directions, policy-feature geometry, o
 - Include harmless refusal-induction and harmful refusal-suppression controls when authorized and safe.
 - Check that the feature does not merely encode apology words, answer length, or sentiment.
 
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/refusal_direction_mapping.md` for single-direction causal tests and controls.
+- `examples/multi_feature_refusal_analysis.md` for category, layer, or token-specific refusal features.
+- `examples/over_refusal_evaluation.md` for measuring benign hard cases and appropriate-refusal retention.
+
 ## Source Map
 
 - `references/013-openai-model-spec.md`

@@ -38,3 +38,9 @@ Briefly describe what this skill helps an agent do.
 - Confirm generated files or results are present.
 - Run the smallest relevant check.
 - Note any skipped checks and why they were skipped.
+
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/example_recipe.md` for a practical task-specific workflow.

@@ -77,6 +77,14 @@ description: Use for representation engineering, activation steering, contrastiv
 - Show effect-size curves, not just cherry-picked generations.
 - Re-run the best setting on held-out prompts and at least one neighboring layer.
 
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/contrastive_activation_addition.md` for paired-prompt steering vectors and dose-response checks.
+- `examples/sae_targeted_steering.md` for sparse-feature steering and SAE feature validation.
+- `examples/kv_cache_vector_field_intervention.md` for context-aware, KV-cache, or vector-field interventions.
+
 ## Source Map
 
 - `references/020-representation-engineering-a-top-down-approach-to-ai-transparency.md`

@@ -81,6 +81,14 @@ For reusable research-tool workflows, use the repository skills under `.agents/s
 - `model-internals-tooling` for hooks, activation caches, attribution, probes, CCA/CKA/SVCCA, and alignment tooling.
 - `literature-and-evaluation-tooling` for paper retrieval, citation metadata, benchmark harnesses, red-team tool selection, evidence, redaction, and disclosure.
 
+Skill loading follows progressive disclosure:
+
+- Start from the skill metadata and select the relevant skill by name and description.
+- Read that skill's `SKILL.md` for the core workflow, constraints, and verification rules.
+- Load files under `.agents/skills/<skill>/examples/` only when the task matches the example's stated use case.
+- Treat examples as practical recipes, not mandatory scripts; adapt them to the repository context while preserving their safety boundaries and checks.
+- Keep safety-sensitive examples non-operational in repo-tracked outputs. Use placeholders such as `DISALLOWED_DOMAIN_REQUEST` or `POLICY_BOUNDARY_CROSSING` instead of live bypass payloads or harmful target content.
+
 When working on research tasks, agents should:
 
 - turn vague ideas into testable hypotheses

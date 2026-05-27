@@ -12,11 +12,36 @@ Each skill should live in its own directory:
 .agents/skills/
   example-skill/
     SKILL.md
+    examples/
     references/
     scripts/
 ```
 
 Use `TEMPLATE.md` as the starting point for each `SKILL.md`.
+
+## Examples
+
+Each skill may include an `examples/` directory:
+
+```text
+.agents/skills/<skill>/
+  SKILL.md
+  examples/
+    practical_recipe.md
+```
+
+Examples are second-level context. Agents should first select a skill, read its `SKILL.md`, then load only the example files whose `Use when` section matches the task.
+
+Example files should be practical and concise:
+
+- `Use when`
+- `Inputs`
+- `Recipe`
+- `Checks`
+- `Expected output`
+- `References`
+
+For safety-sensitive skills, include `Safety boundaries` and keep examples free of operational jailbreak payloads, harmful completions, private challenge prompts, secrets, or exfiltration instructions.
 
 ## Skill Rules
 
@@ -26,6 +51,7 @@ Use `TEMPLATE.md` as the starting point for each `SKILL.md`.
 - Link to stable repository docs instead of duplicating long context.
 - Include scripts or references only when they materially reduce repeated work.
 - Keep examples safe, reproducible, and free of operationally harmful content.
+- Reference examples from `SKILL.md` so agents can discover them after the skill triggers.
 
 ## Current Skills
 
@@ -42,4 +68,4 @@ Use `TEMPLATE.md` as the starting point for each `SKILL.md`.
 - `universal-attack-hypothesis-generation`: creative mechanism-level hypothesis generation for authorized universal-jailbreak research.
 - `universal-jailbreak-research-protocol`: bounty-facing evaluation, evidence gathering, run sheets, and disclosure workflow.
 
-See `SOURCE_COVERAGE.md` for the mapping from local papers in `references/` to these skills.
+Use each skill's `Source Map` section for the mapping from local papers in `references/` to the skill.

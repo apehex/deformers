@@ -60,6 +60,14 @@ description: Use for authorized universal-jailbreak research planning, OpenAI bu
 - Re-run any claimed success at least once with identical settings and once with a new clean chat.
 - Check that public notes contain mechanisms, metrics, and mitigations but not reusable exploit text.
 
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/clean_chat_run_sheet.md` for all-items, clean-state authorized testing records.
+- `examples/evidence_package.md` for bounty-ready private evidence and retest requirements.
+- `examples/disclosure_safe_report.md` for public-safe mechanism reporting without reusable payloads.
+
 ## Source Map
 
 - `references/011-openai-gpt-5-5-bio-bug-bounty.md`

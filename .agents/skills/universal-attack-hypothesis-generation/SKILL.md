@@ -64,6 +64,14 @@ description: Use to generate creative, mechanism-level hypotheses for authorized
 - Every claimed universal result must include failures, retests, and clean-chat status.
 - Compare at least one successful candidate class against a different template or model when possible.
 
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/safe_mechanism_ideation.md` for mechanism-first brainstorming without payload strings.
+- `examples/falsifier_matrix.md` for ranking hypotheses by evidence, falsifiers, and private-test gates.
+- `examples/candidate_triage_without_payloads.md` for safe candidate tracking in repo files.
+
 ## Source Map
 
 - `references/011-openai-gpt-5-5-bio-bug-bounty.md`

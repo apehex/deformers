@@ -59,6 +59,14 @@ description: Use for literature retrieval, citation metadata, benchmark/eval har
 - Run a tiny benchmark/eval subset before scaling.
 - Check redaction before sharing logs or reports.
 
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/paper_retrieval_citation_matrix.md` for sourced literature searches and evidence tables.
+- `examples/eval_harness_selection.md` for choosing between benchmark and safety-eval frameworks.
+- `examples/redacted_disclosure_report.md` for non-operational public reporting from sensitive evidence.
+
 ## Related Skills
 
 - `universal-jailbreak-research-protocol` for authorized bounty-facing evaluation and disclosure.

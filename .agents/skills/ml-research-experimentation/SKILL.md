@@ -51,6 +51,14 @@ description: Use for planning, running, and reviewing rigorous ML experiments wi
 - Confirm the baseline and at least one negative control ran or are explicitly marked pending.
 - Run the smallest relevant test or dry run before scaling.
 
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/hypothesis_to_ablation_plan.md` for turning ideas into falsifiable experiments.
+- `examples/sweep_seed_tracking_recipe.md` for hyperparameter, seed, and tracking discipline.
+- `examples/negative_results_report.md` for documenting failures and next discriminating tests.
+
 ## Tool Recipes
 
 - Training pipeline: load data, validate schema, preprocess/tokenize, split, train, evaluate, and log metrics/artifacts.

@@ -64,6 +64,14 @@ description: Use when studying hidden-state invertibility, prompt reconstruction
 - Test reconstruction on held-out prompts from the same distribution.
 - If a recovered prompt is claimed behavior-equivalent, verify both behavior and activation similarity.
 
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/prompt_reconstruction_benchmark.md` for hidden-state, soft-prompt, or cache reconstruction tests.
+- `examples/refused_knowledge_probe.md` for safe latent decodability studies without publishing harmful answers.
+- `examples/kv_cache_sensitivity_handling.md` for storage, redaction, and sharing rules for latent traces.
+
 ## Source Map
 
 - `references/030-memory-inception-latent-space-kv-cache-manipulation-for-steering-llms.md`

@@ -71,6 +71,14 @@ description: Use when studying chat-template anchoring, role-token dependence, p
 - Test carrier behavior and prompt leakage independently.
 - Verify that a carrier works across fresh contexts, not only in the extraction context.
 
+## Examples
+
+Load examples only after selecting this skill:
+
+- `examples/template_region_attribution.md` for role-token, separator, and assistant-prefix attribution.
+- `examples/hidden_carrier_leakage_check.md` for system vectors, behavior-equivalent tokens, and prompt leakage.
+- `examples/soft_kv_carrier_evaluation.md` for soft prompts, control tokens, and KV-cache carriers.
+
 ## Source Map
 
 - `references/001-qwen-v3-5-9b-model-card.md`
