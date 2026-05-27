@@ -283,8 +283,9 @@ class BaseRunner:
     ) -> None:
         """Build the phase callbacks from the provided configs."""
         self._callbacks = []
-        # todo
-        self._config['testing'] = testing_cfg
+        # testing is part is the core operations because it computes the logits
+        if self._check_config(testing_cfg, ('every_num',)):
+            self._config['testing'] = testing_cfg
         # overwrite the list of callbacks, even when there are none
         if self._check_config(ema_cfg, ('every_num', 'start_num', 'smooth_rate')):
             self._config['ema'] = ema_cfg
