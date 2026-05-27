@@ -513,6 +513,26 @@ class TestStepProgress:
         __pbar.set_postfix.assert_not_called()
 
 
+# CALLBACKS ####################################################################
+
+class TestCallbacks:
+
+    def test_add_callback_accepts_valid_callback(self):
+        __t = _make_runner()
+        __callback = {
+            'name': 'test',
+            'trigger': lambda state: True,
+            'operation': lambda state: None,
+            'cleanup': lambda: None,}
+        __t.add_callback(__callback)
+        assert __t._callbacks[-1] is __callback
+
+    def test_add_callback_rejects_invalid_callback(self):
+        __t = _make_runner()
+        with pytest.raises(AssertionError):
+            __t.add_callback({'name': 'bad'})
+
+
 # STEP_LOSSES ##################################################################
 
 class TestStepLosses:

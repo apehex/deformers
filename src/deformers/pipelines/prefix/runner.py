@@ -596,6 +596,11 @@ class BaseRunner:
 
     # CALLBACKS ################################################################
 
+    def add_callback(self, callback: dict) -> None:
+        """Append one callback to the active callback list."""
+        assert _callbacks.is_callback(callback), 'Invalid callback.'
+        self._callbacks.append(callback)
+
     def step_callbacks(self, step_num: int) -> None:
         """Run all triggered callbacks on the current state."""
         for __callback in self._callbacks:
