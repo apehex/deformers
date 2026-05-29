@@ -60,7 +60,7 @@ import deformers.tokenizers.byte
 
 MAIN_CFG = {
     'resume_opt': True,
-    'model_str': 'qwen/qwen3.5-9b',
+    'model_str': 'nvidia/llama-3.1-nemotron-nano-8b-v1', # 'qwen/qwen3.5-9b',
     'device_str': 'cuda' if torch.cuda.is_available() else 'cpu',
     'dtype_obj': torch.bfloat16,
     'encoding_str': 'utf-8',

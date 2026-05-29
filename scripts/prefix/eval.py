@@ -31,7 +31,8 @@ import deformers.tokenizers.byte
 # COMMON CONFIG ################################################################
 
 MAIN_CFG = {
-    'model_str': 'qwen/qwen3.5-9b',
+    'teacher_str': 'nvidia/llama-3.1-nemotron-nano-8b-v1', # 'qwen/qwen3.5-9b',
+    'student_str': '/content/drive/MyDrive/models/prefix.128x4.8192.pt',
     'device_str': 'cuda' if torch.cuda.is_available() else 'cpu',
     'dtype_obj': torch.bfloat16,
     'encoding_str': 'utf-8',
@@ -63,7 +64,7 @@ BATCH_CFG = {
 # TOKENIZER CONFIG #############################################################
 
 TOKEN_CFG = {
-    'pretrained_model_name_or_path': MAIN_CFG['model_str'],
+    'pretrained_model_name_or_path': MAIN_CFG['teacher_str'],
     'use_fast': True,}
 
 BYTE_CFG = {
@@ -72,7 +73,7 @@ BYTE_CFG = {
 # MODEL CONFIG #################################################################
 
 DOWNLOAD_CFG = {
-    'repo_id': MAIN_CFG['model_str'],
+    'repo_id': MAIN_CFG['teacher_str'],
     'repo_type': 'model',
     'local_dir': os.path.abspath('downloads'),
     'ignore_patterns': ['*.onnx', '*.tflite', '*.msgpack'],}
@@ -90,11 +91,8 @@ MODEL_CFG = {
 
 # CHECKPOINT CONFIG ############################################################
 
-REPOSITORY_CFG = {
-    'repo_path': '',}
-
 CHECKPOINT_CFG = {
-    'path': os.path.abspath('checkpoints/prefix.pt'),
+    'path': MAIN_CFG['student_str'],
     'shape': (
         MAIN_CFG['batch_dim'],
         MAIN_CFG['sequence_dim'],
@@ -183,14 +181,6 @@ mlable.models.freeze(SOURCE_MOD)
 print('[init] freeing unused memory...')
 mlable.models.free_memory()
 
-if REPOSITORY_CFG['repo_path']:
-    print('[init] downloading the prefix checkpoint...')
-    huggingface_hub.hf_hub_download(
-        repo_id=REPOSITORY_CFG['repo_path'],
-        filename=os.path.basename(CHECKPOINT_CFG['path']),
-        local_dir=os.path.dirname(CHECKPOINT_CFG['path']),
-        repo_type='model')
-
 print('[init] loading the prefix weights...')
 PREFIX_MOD = deformers.models.prefix.CompositeBytePrefix.load_checkpoint(**CHECKPOINT_CFG)
 PREFIX_MOD.eval()
@@ -212,6 +202,8 @@ TESTER = deformers.pipelines.prefix.runner.PrefixTester(
 
 print('[init] setting up evaluation context...')
 TESTER.setup_global(context_cfg=CONTEXT_CFG)
+
+# DATASET PROBE ################################################################
 
 print('[eval] configuring evaluation phase...')
 TESTER.setup_phase(
@@ -280,4 +272,7 @@ if EVAL_CFG['vocab_probe']:
     print(f'[eval] vocab KL           : {PROBE_SCALARS["test/kld/k"]:.6f}')
     print(f'[eval] vocab top-k        : {PROBE_SCALARS["test/topk/k"]:.4f}')
 
+# CLEANUP ######################################################################
+
 TESTER.close_callbacks()
+mlable.models.free_memory()
