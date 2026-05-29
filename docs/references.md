@@ -18,18 +18,19 @@
 ## Project-Specific References
 
 Vocabulary transfer
-https://aclanthology.org/2022.emnlp-industry.41.pdf
+https://arxiv.org/abs/2402.09977
 
 UnifyVocab
 https://openreview.net/forum?id=CP6CAqxAGJ
 
 BLIP-2 / Q-Former
-https://proceedings.mlr.press/v202/li23q/li23q.pdf
+https://arxiv.org/abs/2301.12597
 
 Hierarchical softmax
 
 - Morin & Bengio (2005)
 - Mikolov et al. (2013)
+https://arxiv.org/abs/1310.4546
 
 ## Responsible Disclosure and Instruction Hierarchy
 
@@ -43,7 +44,7 @@ OpenAI Model Spec
 https://model-spec.openai.com/
 
 IHEval: Evaluating Language Models on Following the Instruction Hierarchy
-https://assets.amazon.science/22/57/ad173f7f449eadaaa7cd05491585/iheval-evaluating-language-models-on-following-the-instruction-hierarchy.pdf
+https://arxiv.org/abs/2502.08745
 
 SysBench: Can Large Language Models Follow System Messages?
 https://arxiv.org/abs/2408.10943
@@ -58,7 +59,7 @@ Many-Tier Instruction Hierarchy
 https://arxiv.org/abs/2604.09443
 
 Instructional Segment Embedding (ISE)
-https://proceedings.iclr.cc/paper_files/paper/2025/file/ea13534ee239bb3977795b8cc855bacc-Paper-Conference.pdf
+https://arxiv.org/abs/2410.09102
 
 ## Representation Engineering and Activation Steering
 
@@ -153,7 +154,7 @@ Cross-model Transferability among Large Language Models on the Platonic Represen
 https://arxiv.org/abs/2501.02009
 
 Activation Space Interventions Can Be Transferred Between Large Language Models
-https://openreview.net/forum?id=HXOicJsmMQ
+https://arxiv.org/abs/2503.04429
 
 ConTrans: Weak-to-Strong Alignment Engineering via Concept Transplantation
 https://arxiv.org/abs/2405.13578
